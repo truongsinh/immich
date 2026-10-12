@@ -26,12 +26,32 @@ services:
       - upload-data:/usr/src/app/upload
     environment:
       IMMICH_STORAGE_BACKEND: ${IMMICH_STORAGE_BACKEND:-disk}
+      # the legacy IMMICH_S3_* settings define the alias `default`
       IMMICH_S3_BUCKET: immich-test
       IMMICH_S3_ENDPOINT: http://minio:9000
       IMMICH_S3_ACCESS_KEY_ID: minioadmin
       IMMICH_S3_SECRET_ACCESS_KEY: minioadmin
       IMMICH_S3_REGION: us-east-1
       IMMICH_S3_SERVE_MODE: proxy
+      # named aliases, each on its own bucket; only those listed in IMMICH_STORAGE_ALIASES are configured
+      IMMICH_STORAGE_ALIASES: ${IMMICH_STORAGE_ALIASES:-}
+      IMMICH_STORAGE_WRITE_ORIGINALS: ${IMMICH_STORAGE_WRITE_ORIGINALS:-}
+      IMMICH_STORAGE_WRITE_DERIVATIVES: ${IMMICH_STORAGE_WRITE_DERIVATIVES:-}
+      IMMICH_S3_ORIGINALS_EU_BUCKET: immich-originals
+      IMMICH_S3_ORIGINALS_EU_ENDPOINT: http://minio:9000
+      IMMICH_S3_ORIGINALS_EU_ACCESS_KEY_ID: minioadmin
+      IMMICH_S3_ORIGINALS_EU_SECRET_ACCESS_KEY: minioadmin
+      IMMICH_S3_ORIGINALS_EU_SERVE_MODE: proxy
+      IMMICH_S3_PREVIEWS_HOME_BUCKET: immich-previews
+      IMMICH_S3_PREVIEWS_HOME_ENDPOINT: ${PREVIEWS_HOME_ENDPOINT:-http://minio:9000}
+      IMMICH_S3_PREVIEWS_HOME_ACCESS_KEY_ID: minioadmin
+      IMMICH_S3_PREVIEWS_HOME_SECRET_ACCESS_KEY: minioadmin
+      IMMICH_S3_PREVIEWS_HOME_SERVE_MODE: proxy
+      IMMICH_S3_ARCHIVE_BUCKET: immich-archive
+      IMMICH_S3_ARCHIVE_ENDPOINT: http://minio:9000
+      IMMICH_S3_ARCHIVE_ACCESS_KEY_ID: minioadmin
+      IMMICH_S3_ARCHIVE_SECRET_ACCESS_KEY: minioadmin
+      IMMICH_S3_ARCHIVE_SERVE_MODE: proxy
     depends_on:
       minio:
         condition: service_healthy

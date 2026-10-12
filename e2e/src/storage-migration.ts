@@ -260,13 +260,9 @@ const ALL_FILE_TYPES = {
   profileImages: true,
 };
 
-export async function startMigration(
-  token: string,
-  direction: 'toS3' | 'toDisk',
-  options?: MigrationOptions,
-): Promise<string> {
+export async function startMigration(token: string, target: string, options?: MigrationOptions): Promise<string> {
   const body = {
-    direction,
+    target,
     deleteSource: options?.deleteSource ?? true,
     fileTypes: { ...ALL_FILE_TYPES, ...options?.fileTypes },
     concurrency: options?.concurrency ?? 5,
@@ -378,7 +374,7 @@ export interface MigrationState {
   assetFiles: { id: string; path: string; type: string }[];
   persons: { id: string; thumbnailPath: string }[];
   users: { id: string; profileImagePath: string }[];
-  migrationLogs: { id: string; entityType: string; direction: string; batchId: string }[];
+  migrationLogs: { id: string; entityType: string; target: string; batchId: string }[];
 }
 
 export async function captureState(): Promise<MigrationState> {
@@ -391,8 +387,8 @@ export async function captureState(): Promise<MigrationState> {
     queryDb<{ id: string; profileImagePath: string }>(
       'SELECT id, "profileImagePath" FROM "user" WHERE "profileImagePath" != \'\' ORDER BY id',
     ),
-    queryDb<{ id: string; entityType: string; direction: string; batchId: string }>(
-      'SELECT id, "entityType", direction, "batchId" FROM storage_migration_log ORDER BY id',
+    queryDb<{ id: string; entityType: string; target: string; batchId: string }>(
+      'SELECT id, "entityType", target, "batchId" FROM storage_migration_log ORDER BY id',
     ),
   ]);
 
@@ -411,9 +407,36 @@ export function dockerExec(service: string, cmd: string): string {
   }).trim();
 }
 
+// Stored paths name their storage: `file:///abs/path` on disk, `s3://<alias>/<key>` on an S3 alias.
+export const ALIAS_BUCKETS: Record<string, string> = {
+  default: 'immich-test',
+  'originals-eu': 'immich-originals',
+  'previews-home': 'immich-previews',
+  archive: 'immich-archive',
+};
+
+export const isOnDisk = (path: string): boolean => path.startsWith('file:///');
+
+export const isOnAlias = (path: string, alias = 'default'): boolean => path.startsWith(`s3://${alias}/`);
+
+/** The object key of a stored `s3://` path. */
+export const keyOf = (path: string): string => path.slice(path.indexOf('/', 's3://'.length) + 1);
+
+/** The `mc` path of a stored `s3://` path, or of a bare key in the default bucket. */
+export function minioObject(path: string): string {
+  if (!path.startsWith('s3://')) {
+    return `local/${ALIAS_BUCKETS.default}/${path}`;
+  }
+  const alias = path.slice('s3://'.length, path.indexOf('/', 's3://'.length));
+  return `local/${ALIAS_BUCKETS[alias]}/${keyOf(path)}`;
+}
+
+/** The filesystem path of a stored `file://` path; a bare path is returned unchanged. */
+export const diskPathOf = (path: string): string => (path.startsWith('file://') ? path.slice('file://'.length) : path);
+
 export function minioFileExists(key: string): boolean {
   try {
-    dockerExec('minio', `mc stat local/immich-test/${key}`);
+    dockerExec('minio', `mc stat ${minioObject(key)}`);
     return true;
   } catch {
     return false;
@@ -422,7 +445,7 @@ export function minioFileExists(key: string): boolean {
 
 export function diskFileExists(path: string): boolean {
   try {
-    dockerExec('immich-server', `test -f "${path}"`);
+    dockerExec('immich-server', `test -f "${diskPathOf(path)}"`);
     return true;
   } catch {
     return false;
@@ -430,7 +453,12 @@ export function diskFileExists(path: string): boolean {
 }
 
 export function minioReadFile(key: string): string {
-  return dockerExec('minio', `mc cat local/immich-test/${key}`);
+  return dockerExec('minio', `mc cat ${minioObject(key)}`);
+}
+
+/** Raw bytes of a stored `s3://` object; `mc cat` through `dockerExec` would decode them as text. */
+export function minioReadBytes(path: string): Buffer {
+  return execSync(`${COMPOSE} exec -T minio mc cat ${minioObject(path)}`, { cwd: E2E_DIR, timeout: 30_000 });
 }
 
 export function minioSetupAlias(): void {
@@ -486,7 +514,7 @@ async function phaseSetup(): Promise<void> {
   const pngBase64 = createPng().toString('base64');
   dockerExec('immich-server', `echo '${pngBase64}' | base64 -d > /usr/src/app/upload/thumbs/person-test.png`);
   await queryDb('UPDATE person SET "thumbnailPath" = $1 WHERE "personGroupId" = $2', [
-    '/usr/src/app/upload/thumbs/person-test.png',
+    'file:///usr/src/app/upload/thumbs/person-test.png',
     person.id,
   ]);
   console.log('  Person thumbnail written and DB updated');
@@ -518,17 +546,17 @@ async function phaseSetup(): Promise<void> {
   assert.ok(state.assetFiles.length > 0, `Expected > 0 asset files, got ${state.assetFiles.length}`);
 
   for (const asset of state.assets) {
-    assert.ok(asset.originalPath.startsWith('/'), `Asset originalPath is not absolute: ${asset.originalPath}`);
+    assert.ok(isOnDisk(asset.originalPath), `Asset originalPath is not on disk (file://): ${asset.originalPath}`);
   }
   for (const af of state.assetFiles) {
-    assert.ok(af.path.startsWith('/'), `AssetFile path is not absolute: ${af.path}`);
+    assert.ok(isOnDisk(af.path), `AssetFile path is not on disk (file://): ${af.path}`);
   }
   for (const p of state.persons) {
-    assert.ok(p.thumbnailPath.startsWith('/'), `Person thumbnailPath is not absolute: ${p.thumbnailPath}`);
+    assert.ok(isOnDisk(p.thumbnailPath), `Person thumbnailPath is not on disk (file://): ${p.thumbnailPath}`);
   }
   for (const u of state.users) {
     if (u.profileImagePath) {
-      assert.ok(u.profileImagePath.startsWith('/'), `User profileImagePath is not absolute: ${u.profileImagePath}`);
+      assert.ok(isOnDisk(u.profileImagePath), `User profileImagePath is not on disk (file://): ${u.profileImagePath}`);
     }
   }
 
@@ -567,7 +595,7 @@ async function phaseMigrateToS3(): Promise<void> {
 
   // Get migration estimate
   console.log('  Getting migration estimate...');
-  const estimate = await api('GET', '/storage-migration/estimate?direction=toS3', { token });
+  const estimate = await api('GET', '/storage-migration/estimate?target=s3%3A%2F%2Fdefault', { token });
   const counts = estimate.fileCounts;
   console.log(
     `  Estimate: total=${counts.total} originals=${counts.originals ?? 0} thumbnails=${counts.thumbnails ?? 0}`,
@@ -576,7 +604,7 @@ async function phaseMigrateToS3(): Promise<void> {
 
   // Start migration
   console.log('  Starting migration to S3...');
-  const batchId = await startMigration(token, 'toS3');
+  const batchId = await startMigration(token, 's3://default');
   console.log(`  Batch ID: ${batchId}`);
 
   // Wait for migration to complete
@@ -591,27 +619,27 @@ async function phaseMigrateToS3(): Promise<void> {
   console.log('  Capturing and validating post-migration state...');
   const state = await captureState();
 
-  // DB paths should be relative (not starting with /)
+  // DB paths should name the default S3 alias
   for (const asset of state.assets) {
     assert.ok(
-      !asset.originalPath.startsWith('/'),
-      `Asset originalPath should be relative after S3 migration: ${asset.originalPath}`,
+      isOnAlias(asset.originalPath),
+      `Asset originalPath should be on s3://default after S3 migration: ${asset.originalPath}`,
     );
   }
   for (const af of state.assetFiles) {
-    assert.ok(!af.path.startsWith('/'), `AssetFile path should be relative after S3 migration: ${af.path}`);
+    assert.ok(isOnAlias(af.path), `AssetFile path should be on s3://default after S3 migration: ${af.path}`);
   }
   for (const p of state.persons) {
     assert.ok(
-      !p.thumbnailPath.startsWith('/'),
-      `Person thumbnailPath should be relative after S3 migration: ${p.thumbnailPath}`,
+      isOnAlias(p.thumbnailPath),
+      `Person thumbnailPath should be on s3://default after S3 migration: ${p.thumbnailPath}`,
     );
   }
   for (const u of state.users) {
     if (u.profileImagePath) {
       assert.ok(
-        !u.profileImagePath.startsWith('/'),
-        `User profileImagePath should be relative after S3 migration: ${u.profileImagePath}`,
+        isOnAlias(u.profileImagePath),
+        `User profileImagePath should be on s3://default after S3 migration: ${u.profileImagePath}`,
       );
     }
   }
@@ -623,11 +651,11 @@ async function phaseMigrateToS3(): Promise<void> {
       const asset = state.assets.find((a: { id: string }) => a.id === id);
       assert.ok(asset, `Expected uploaded asset ${id} to exist in DB`);
       assert.ok(
-        !asset.originalPath.startsWith('/'),
-        `Uploaded asset ${id} should have relative path after S3 migration: ${asset.originalPath}`,
+        isOnAlias(asset.originalPath),
+        `Uploaded asset ${id} should be on s3://default after S3 migration: ${asset.originalPath}`,
       );
     }
-    console.log(`  Multi-user: all ${allUploadedIds.length} uploaded assets have relative paths`);
+    console.log(`  Multi-user: all ${allUploadedIds.length} uploaded assets are on s3://default`);
   }
 
   // Multi-user verification: both users' profile images migrated
@@ -638,8 +666,8 @@ async function phaseMigrateToS3(): Promise<void> {
   for (const u of state.users) {
     if (u.profileImagePath) {
       assert.ok(
-        !u.profileImagePath.startsWith('/'),
-        `User ${u.id} profileImagePath should be relative: ${u.profileImagePath}`,
+        isOnAlias(u.profileImagePath),
+        `User ${u.id} profileImagePath should be on s3://default: ${u.profileImagePath}`,
       );
     }
   }
@@ -712,14 +740,14 @@ async function phaseMigrateToS3(): Promise<void> {
   console.log('  Verifying disk files are removed...');
   for (const asset of state.assets) {
     assert.ok(
-      !diskFileExists(`${MEDIA_LOCATION}/${asset.originalPath}`),
-      `Expected disk file to be deleted: ${MEDIA_LOCATION}/${asset.originalPath}`,
+      !diskFileExists(`${MEDIA_LOCATION}/${keyOf(asset.originalPath)}`),
+      `Expected disk file to be deleted: ${MEDIA_LOCATION}/${keyOf(asset.originalPath)}`,
     );
   }
 
   // Migration log validation
-  const s3Logs = state.migrationLogs.filter((l) => l.direction === 'toS3');
-  assert.ok(s3Logs.length > 0, `Expected migration logs with direction=toS3, got ${s3Logs.length}`);
+  const s3Logs = state.migrationLogs.filter((l) => l.target === 's3://default');
+  assert.ok(s3Logs.length > 0, `Expected migration logs with target=s3://default, got ${s3Logs.length}`);
   const batchLogs = s3Logs.filter((l) => l.batchId === batchId);
   assert.ok(batchLogs.length > 0, `Expected migration logs with batchId=${batchId}, got ${batchLogs.length}`);
 
@@ -746,7 +774,7 @@ async function phaseMigrateToDisk(): Promise<void> {
 
   // Start migration
   console.log('  Starting migration to disk...');
-  const batchId = await startMigration(token, 'toDisk');
+  const batchId = await startMigration(token, 'file://');
   console.log(`  Batch ID: ${batchId}`);
 
   // Wait for migration to complete
@@ -757,27 +785,27 @@ async function phaseMigrateToDisk(): Promise<void> {
   console.log('  Capturing and validating post-migration state...');
   const state = await captureState();
 
-  // DB paths should be absolute (starting with /)
+  // DB paths should name disk
   for (const asset of state.assets) {
     assert.ok(
-      asset.originalPath.startsWith('/'),
-      `Asset originalPath should be absolute after disk migration: ${asset.originalPath}`,
+      isOnDisk(asset.originalPath),
+      `Asset originalPath should be on disk (file://) after disk migration: ${asset.originalPath}`,
     );
   }
   for (const af of state.assetFiles) {
-    assert.ok(af.path.startsWith('/'), `AssetFile path should be absolute after disk migration: ${af.path}`);
+    assert.ok(isOnDisk(af.path), `AssetFile path should be on disk (file://) after disk migration: ${af.path}`);
   }
   for (const p of state.persons) {
     assert.ok(
-      p.thumbnailPath.startsWith('/'),
-      `Person thumbnailPath should be absolute after disk migration: ${p.thumbnailPath}`,
+      isOnDisk(p.thumbnailPath),
+      `Person thumbnailPath should be on disk (file://) after disk migration: ${p.thumbnailPath}`,
     );
   }
   for (const u of state.users) {
     if (u.profileImagePath) {
       assert.ok(
-        u.profileImagePath.startsWith('/'),
-        `User profileImagePath should be absolute after disk migration: ${u.profileImagePath}`,
+        isOnDisk(u.profileImagePath),
+        `User profileImagePath should be on disk (file://) after disk migration: ${u.profileImagePath}`,
       );
     }
   }
@@ -789,11 +817,11 @@ async function phaseMigrateToDisk(): Promise<void> {
       const asset = state.assets.find((a: { id: string }) => a.id === id);
       assert.ok(asset, `Expected uploaded asset ${id} to exist in DB`);
       assert.ok(
-        asset.originalPath.startsWith('/'),
-        `Uploaded asset ${id} should have absolute path after disk migration: ${asset.originalPath}`,
+        isOnDisk(asset.originalPath),
+        `Uploaded asset ${id} should be on disk (file://) after disk migration: ${asset.originalPath}`,
       );
     }
-    console.log(`  Multi-user: all ${allUploadedIds.length} uploaded assets have absolute paths`);
+    console.log(`  Multi-user: all ${allUploadedIds.length} uploaded assets are on disk (file://)`);
   }
 
   // Multi-user verification: both users' profile images migrated back
@@ -873,13 +901,13 @@ async function phaseMigrateToDisk(): Promise<void> {
   console.log('  Verifying MinIO files are removed...');
   const mediaPrefix = new RegExp(`^${MEDIA_LOCATION}/`);
   for (const asset of state.assets) {
-    const s3Key = asset.originalPath.replace(mediaPrefix, '');
+    const s3Key = diskPathOf(asset.originalPath).replace(mediaPrefix, '');
     assert.ok(!minioFileExists(s3Key), `Expected MinIO file to be deleted: ${s3Key}`);
   }
 
   // Migration log validation
-  const diskLogs = state.migrationLogs.filter((l) => l.direction === 'toDisk');
-  assert.ok(diskLogs.length > 0, `Expected migration logs with direction=toDisk, got ${diskLogs.length}`);
+  const diskLogs = state.migrationLogs.filter((l) => l.target === 'file://');
+  assert.ok(diskLogs.length > 0, `Expected migration logs with target=file://, got ${diskLogs.length}`);
 
   // Save batchId for potential rollback testing
   saveState({ lastToDiskBatchId: batchId });
@@ -901,7 +929,7 @@ async function phaseEstimate(): Promise<void> {
 
   // toS3 estimate: files are on disk, so should have counts
   console.log('  Getting toS3 estimate...');
-  const toS3 = await api('GET', '/storage-migration/estimate?direction=toS3', { token });
+  const toS3 = await api('GET', '/storage-migration/estimate?target=s3%3A%2F%2Fdefault', { token });
   console.log(
     `  toS3: total=${toS3.fileCounts.total} originals=${toS3.fileCounts.originals} thumbnails=${toS3.fileCounts.thumbnails} previews=${toS3.fileCounts.previews}`,
   );
@@ -933,7 +961,7 @@ async function phaseEstimate(): Promise<void> {
 
   // toDisk estimate: files are already on disk, so should be 0
   console.log('  Getting toDisk estimate...');
-  const toDisk = await api('GET', '/storage-migration/estimate?direction=toDisk', { token });
+  const toDisk = await api('GET', '/storage-migration/estimate?target=file%3A%2F%2F', { token });
   console.log(`  toDisk: total=${toDisk.fileCounts.total}`);
   assert.equal(toDisk.fileCounts.total, 0, `Expected toDisk total = 0, got ${toDisk.fileCounts.total}`);
   assert.equal(toDisk.fileCounts.originals, 0, `Expected toDisk originals = 0, got ${toDisk.fileCounts.originals}`);
@@ -957,12 +985,12 @@ async function phaseRollback(): Promise<void> {
   const batchId = savedState.lastToS3BatchId;
   assert.ok(batchId, 'No lastToS3BatchId in state — run migrate-to-s3 first');
 
-  // Capture pre-rollback state (paths should be relative / S3)
+  // Capture pre-rollback state (paths should be on S3)
   const preState = await captureState();
   for (const asset of preState.assets) {
     assert.ok(
-      !asset.originalPath.startsWith('/'),
-      `Pre-rollback: asset path should be relative: ${asset.originalPath}`,
+      isOnAlias(asset.originalPath),
+      `Pre-rollback: asset path should be on s3://default: ${asset.originalPath}`,
     );
   }
 
@@ -979,30 +1007,27 @@ async function phaseRollback(): Promise<void> {
     `Expected all ${result.total} entries rolled back, got ${result.rolledBack}`,
   );
 
-  // Verify paths reverted to absolute (disk paths)
-  console.log('  Verifying paths reverted to absolute...');
+  // Verify paths reverted to disk
+  console.log('  Verifying paths reverted to disk...');
   const postState = await captureState();
 
   for (const asset of postState.assets) {
     assert.ok(
-      asset.originalPath.startsWith('/'),
-      `Post-rollback: asset originalPath should be absolute: ${asset.originalPath}`,
+      isOnDisk(asset.originalPath),
+      `Post-rollback: asset originalPath should be on disk: ${asset.originalPath}`,
     );
   }
   for (const af of postState.assetFiles) {
-    assert.ok(af.path.startsWith('/'), `Post-rollback: assetFile path should be absolute: ${af.path}`);
+    assert.ok(isOnDisk(af.path), `Post-rollback: assetFile path should be on disk: ${af.path}`);
   }
   for (const p of postState.persons) {
-    assert.ok(
-      p.thumbnailPath.startsWith('/'),
-      `Post-rollback: person thumbnailPath should be absolute: ${p.thumbnailPath}`,
-    );
+    assert.ok(isOnDisk(p.thumbnailPath), `Post-rollback: person thumbnailPath should be on disk: ${p.thumbnailPath}`);
   }
   for (const u of postState.users) {
     if (u.profileImagePath) {
       assert.ok(
-        u.profileImagePath.startsWith('/'),
-        `Post-rollback: user profileImagePath should be absolute: ${u.profileImagePath}`,
+        isOnDisk(u.profileImagePath),
+        `Post-rollback: user profileImagePath should be on disk: ${u.profileImagePath}`,
       );
     }
   }
@@ -1046,19 +1071,19 @@ async function phaseNoFiles(): Promise<void> {
   const token = await loginAdmin();
 
   // Verify estimate shows 0 files for toS3 (everything already there)
-  const estimate = await api('GET', '/storage-migration/estimate?direction=toS3', { token });
+  const estimate = await api('GET', '/storage-migration/estimate?target=s3%3A%2F%2Fdefault', { token });
   console.log(`  toS3 estimate after migration: total=${estimate.fileCounts.total}`);
   assert.equal(estimate.fileCounts.total, 0, `Expected 0 files to migrate toS3, got ${estimate.fileCounts.total}`);
 
   // Verify toDisk estimate shows files (they're on S3, can be migrated back)
-  const toDiskEstimate = await api('GET', '/storage-migration/estimate?direction=toDisk', { token });
+  const toDiskEstimate = await api('GET', '/storage-migration/estimate?target=file%3A%2F%2F', { token });
   console.log(`  toDisk estimate: total=${toDiskEstimate.fileCounts.total}`);
   assert.ok(toDiskEstimate.fileCounts.total > 0, `Expected toDisk total > 0, got ${toDiskEstimate.fileCounts.total}`);
 
   // Try starting toS3 migration — should fail with "No files to migrate"
   console.log('  Attempting toS3 migration (should fail)...');
   try {
-    await startMigration(token, 'toS3');
+    await startMigration(token, 's3://default');
     assert.fail('Expected startMigration to throw "No files to migrate"');
   } catch (error: any) {
     assert.ok(
@@ -1082,13 +1107,13 @@ async function phaseConcurrentRejection(): Promise<void> {
 
   // Start first migration with low concurrency to widen the race window
   console.log('  Starting first migration (concurrency=1)...');
-  const batchId = await startMigration(token, 'toS3', { concurrency: 1 });
+  const batchId = await startMigration(token, 's3://default', { concurrency: 1 });
   console.log(`  First migration started: ${batchId}`);
 
   // Immediately try to start a second migration
   console.log('  Attempting second concurrent migration...');
   try {
-    await startMigration(token, 'toS3', { concurrency: 1 });
+    await startMigration(token, 's3://default', { concurrency: 1 });
     // If we get here, the first migration completed before our second call.
     // This is acceptable — verify the second one also completed.
     console.log('  Note: first migration completed before second call (race not caught)');
@@ -1124,17 +1149,17 @@ async function phaseSelectiveToS3(): Promise<void> {
   // Capture pre-migration state
   const preState = await captureState();
 
-  // Verify all paths are absolute (on disk)
+  // Verify all paths are on disk
   for (const asset of preState.assets) {
     assert.ok(
-      asset.originalPath.startsWith('/'),
-      `Pre-selective: asset originalPath should be absolute: ${asset.originalPath}`,
+      isOnDisk(asset.originalPath),
+      `Pre-selective: asset originalPath should be on disk: ${asset.originalPath}`,
     );
   }
 
   // Start migration with ONLY originals enabled
   console.log('  Starting selective migration (originals only)...');
-  const batchId = await startMigration(token, 'toS3', {
+  const batchId = await startMigration(token, 's3://default', {
     fileTypes: {
       originals: true,
       thumbnails: false,
@@ -1154,36 +1179,36 @@ async function phaseSelectiveToS3(): Promise<void> {
   console.log('  Verifying selective migration results...');
   const postState = await captureState();
 
-  // Originals should be relative (migrated to S3)
+  // Originals should be on S3
   for (const asset of postState.assets) {
     assert.ok(
-      !asset.originalPath.startsWith('/'),
-      `After selective migration: asset originalPath should be relative: ${asset.originalPath}`,
+      isOnAlias(asset.originalPath),
+      `After selective migration: asset originalPath should be on s3://default: ${asset.originalPath}`,
     );
   }
 
-  // Asset files (thumbnails, previews) should still be absolute (NOT migrated)
+  // Asset files (thumbnails, previews) should still be on disk (NOT migrated)
   for (const af of postState.assetFiles) {
     assert.ok(
-      af.path.startsWith('/'),
-      `After selective migration: assetFile path should still be absolute (not migrated): ${af.path}`,
+      isOnDisk(af.path),
+      `After selective migration: assetFile path should still be on disk (not migrated): ${af.path}`,
     );
   }
 
-  // Person thumbnails should still be absolute
+  // Person thumbnails should still be on disk
   for (const p of postState.persons) {
     assert.ok(
-      p.thumbnailPath.startsWith('/'),
-      `After selective migration: person thumbnailPath should still be absolute: ${p.thumbnailPath}`,
+      isOnDisk(p.thumbnailPath),
+      `After selective migration: person thumbnailPath should still be on disk: ${p.thumbnailPath}`,
     );
   }
 
-  // User profile images should still be absolute
+  // User profile images should still be on disk
   for (const u of postState.users) {
     if (u.profileImagePath) {
       assert.ok(
-        u.profileImagePath.startsWith('/'),
-        `After selective migration: user profileImagePath should still be absolute: ${u.profileImagePath}`,
+        isOnDisk(u.profileImagePath),
+        `After selective migration: user profileImagePath should still be on disk: ${u.profileImagePath}`,
       );
     }
   }
@@ -1202,7 +1227,7 @@ async function phaseSelectiveToS3(): Promise<void> {
   }
 
   // Verify estimate: originals should be 0, but thumbnails/previews should remain
-  const estimate = await api('GET', '/storage-migration/estimate?direction=toS3', { token });
+  const estimate = await api('GET', '/storage-migration/estimate?target=s3%3A%2F%2Fdefault', { token });
   console.log(
     `  Remaining toS3 estimate: total=${estimate.fileCounts.total} originals=${estimate.fileCounts.originals}`,
   );
@@ -1243,7 +1268,7 @@ async function phaseSelectiveCleanup(): Promise<void> {
 
   // Migrate remaining file types (everything except originals)
   console.log('  Starting cleanup migration (everything except originals)...');
-  const batchId = await startMigration(token, 'toS3', {
+  const batchId = await startMigration(token, 's3://default', {
     fileTypes: {
       originals: false,
       thumbnails: true,
@@ -1259,36 +1284,36 @@ async function phaseSelectiveCleanup(): Promise<void> {
 
   await waitForMigration(token);
 
-  // Verify all paths are now relative (everything on S3)
-  console.log('  Verifying all paths are relative...');
+  // Verify all paths are now on S3
+  console.log('  Verifying all paths are on S3...');
   const state = await captureState();
 
   for (const asset of state.assets) {
     assert.ok(
-      !asset.originalPath.startsWith('/'),
-      `After cleanup: asset originalPath should be relative: ${asset.originalPath}`,
+      isOnAlias(asset.originalPath),
+      `After cleanup: asset originalPath should be on s3://default: ${asset.originalPath}`,
     );
   }
   for (const af of state.assetFiles) {
-    assert.ok(!af.path.startsWith('/'), `After cleanup: assetFile path should be relative: ${af.path}`);
+    assert.ok(isOnAlias(af.path), `After cleanup: assetFile path should be on s3://default: ${af.path}`);
   }
   for (const p of state.persons) {
     assert.ok(
-      !p.thumbnailPath.startsWith('/'),
-      `After cleanup: person thumbnailPath should be relative: ${p.thumbnailPath}`,
+      isOnAlias(p.thumbnailPath),
+      `After cleanup: person thumbnailPath should be on s3://default: ${p.thumbnailPath}`,
     );
   }
   for (const u of state.users) {
     if (u.profileImagePath) {
       assert.ok(
-        !u.profileImagePath.startsWith('/'),
-        `After cleanup: user profileImagePath should be relative: ${u.profileImagePath}`,
+        isOnAlias(u.profileImagePath),
+        `After cleanup: user profileImagePath should be on s3://default: ${u.profileImagePath}`,
       );
     }
   }
 
   // Verify estimate shows 0 for toS3
-  const estimate = await api('GET', '/storage-migration/estimate?direction=toS3', { token });
+  const estimate = await api('GET', '/storage-migration/estimate?target=s3%3A%2F%2Fdefault', { token });
   assert.equal(estimate.fileCounts.total, 0, `Expected 0 remaining files, got ${estimate.fileCounts.total}`);
 
   saveState({ lastToS3BatchId: batchId });
@@ -1309,28 +1334,28 @@ async function phaseDeleteSourceFalse(): Promise<void> {
   const preState = await captureState();
   const diskPaths = preState.assets.map((a) => a.originalPath);
   for (const path of diskPaths) {
-    assert.ok(path.startsWith('/'), `Pre-migration: asset path should be absolute: ${path}`);
+    assert.ok(isOnDisk(path), `Pre-migration: asset path should be on disk: ${path}`);
     assert.ok(diskFileExists(path), `Pre-migration: disk file should exist: ${path}`);
   }
 
   // Start migration with deleteSource=false
   console.log('  Starting migration with deleteSource=false...');
-  const batchId = await startMigration(token, 'toS3', { deleteSource: false });
+  const batchId = await startMigration(token, 's3://default', { deleteSource: false });
   console.log(`  Batch ID: ${batchId}`);
 
   await waitForMigration(token);
 
-  // Verify DB paths are now relative (S3)
-  console.log('  Verifying DB paths updated to relative...');
+  // Verify DB paths are now on S3
+  console.log('  Verifying DB paths updated to S3...');
   const postState = await captureState();
   for (const asset of postState.assets) {
     assert.ok(
-      !asset.originalPath.startsWith('/'),
-      `After migration: asset originalPath should be relative: ${asset.originalPath}`,
+      isOnAlias(asset.originalPath),
+      `After migration: asset originalPath should be on s3://default: ${asset.originalPath}`,
     );
   }
   for (const af of postState.assetFiles) {
-    assert.ok(!af.path.startsWith('/'), `After migration: assetFile path should be relative: ${af.path}`);
+    assert.ok(isOnAlias(af.path), `After migration: assetFile path should be on s3://default: ${af.path}`);
   }
 
   // Verify S3 files exist
@@ -1507,10 +1532,10 @@ async function phaseSidecarVerify(): Promise<void> {
   const sidecarFile = sidecarFiles[0];
   console.log(`  Sidecar file: ${sidecarFile.path} (type: ${sidecarFile.type})`);
 
-  // Verify path is relative (on S3)
+  // Verify path is on S3
   assert.ok(
-    !sidecarFile.path.startsWith('/'),
-    `Sidecar path should be relative after S3 migration: ${sidecarFile.path}`,
+    isOnAlias(sidecarFile.path),
+    `Sidecar path should be on s3://default after S3 migration: ${sidecarFile.path}`,
   );
 
   // Verify sidecar exists in MinIO
@@ -1549,9 +1574,9 @@ async function phaseTemplateS3BulkSkipped(): Promise<void> {
   const preCount = await countMoveHistory();
   const preState = await captureState();
 
-  // Precondition: every asset has a relative S3 path
+  // Precondition: every asset has an S3 path
   for (const a of preState.assets) {
-    assert.ok(!a.originalPath.startsWith('/'), `Precondition failed: asset ${a.id} path is absolute`);
+    assert.ok(isOnAlias(a.originalPath), `Precondition failed: asset ${a.id} path is on disk`);
   }
 
   try {
@@ -1608,7 +1633,7 @@ async function phaseTemplateS3UploadSkipped(): Promise<void> {
     assert.ok(rows[0], `Asset ${newAssetId} not found`);
     const { originalPath } = rows[0];
 
-    assert.ok(!originalPath.startsWith('/'), `Expected relative path, got ${originalPath}`);
+    assert.ok(isOnAlias(originalPath), `Expected an S3 path, got ${originalPath}`);
     assert.ok(originalPath.startsWith('upload/'), `Expected upload/ prefix, got ${originalPath}`);
 
     minioSetupAlias();
@@ -1656,7 +1681,7 @@ async function phaseTemplateS3LivePhotoSkipped(): Promise<void> {
     );
     assert.equal(rows.length, 2, `Expected 2 assets, got ${rows.length}`);
     for (const r of rows) {
-      assert.ok(!r.originalPath.startsWith('/'), `Expected relative path for ${r.id}, got ${r.originalPath}`);
+      assert.ok(isOnAlias(r.originalPath), `Expected an S3 path for ${r.id}, got ${r.originalPath}`);
       assert.ok(r.originalPath.startsWith('upload/'), `Expected upload/ prefix for ${r.id}`);
     }
 
@@ -1825,9 +1850,9 @@ async function phaseTemplateDiskBaseline(): Promise<void> {
     `Missing seeded assets in pre-state: expected ${seededIds.length}, got ${preSeeded.length}`,
   );
 
-  // Every seeded asset is on disk (absolute) post-rollback
+  // Every seeded asset is on disk post-rollback
   for (const a of preSeeded) {
-    assert.ok(a.originalPath.startsWith('/'), `Pre-baseline: seeded asset ${a.id} not absolute`);
+    assert.ok(isOnDisk(a.originalPath), `Pre-baseline: seeded asset ${a.id} not on disk`);
   }
   const preAssetPaths = new Map(preSeeded.map((a) => [a.id, a.originalPath]));
 
@@ -1903,25 +1928,22 @@ async function phaseCopyAssetSidecarS3(): Promise<void> {
   await waitForProcessing(token);
   console.log('  Processing drained');
 
-  // Source must have exactly one sidecar row with a relative (S3) path.
+  // Source must have exactly one sidecar row with an S3 path.
   const srcSidecarRows = await queryDb<{ path: string }>(
     `SELECT path FROM asset_file WHERE "assetId" = $1 AND type = 'sidecar'`,
     [sourceId],
   );
   assert.equal(srcSidecarRows.length, 1, `Expected source to have 1 sidecar row, got ${srcSidecarRows.length}`);
-  assert.ok(
-    !srcSidecarRows[0].path.startsWith('/'),
-    `Expected source sidecar path relative (S3), got ${srcSidecarRows[0].path}`,
-  );
+  assert.ok(isOnAlias(srcSidecarRows[0].path), `Expected source sidecar path on S3, got ${srcSidecarRows[0].path}`);
 
-  // Target's originalPath must also be a relative S3 key (proves backend config).
+  // Target's originalPath must also be on S3 (proves backend config).
   const targetRows = await queryDb<{ originalPath: string }>(`SELECT "originalPath" FROM asset WHERE id = $1`, [
     targetId,
   ]);
   assert.ok(targetRows[0], `Target asset ${targetId} not found`);
   assert.ok(
-    !targetRows[0].originalPath.startsWith('/'),
-    `Expected target originalPath relative, got ${targetRows[0].originalPath}`,
+    isOnAlias(targetRows[0].originalPath),
+    `Expected target originalPath on S3, got ${targetRows[0].originalPath}`,
   );
   const targetSidecarKey = `${targetRows[0].originalPath}.xmp`;
 
@@ -2021,11 +2043,138 @@ async function phaseUserDeleteS3Orphans(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Phase: split-aliases
+//
+// One library split across two buckets: originals are written to the
+// originals-eu alias, thumbnails and previews to previews-home. Both download
+// and view must return the stored bytes unchanged, and moving the originals to
+// a third alias (archive) with the migration job must keep the download intact.
+//
+// Runs with IMMICH_STORAGE_WRITE_ORIGINALS=s3://originals-eu and
+// IMMICH_STORAGE_WRITE_DERIVATIVES=s3://previews-home.
+// ---------------------------------------------------------------------------
+async function fetchBytes(token: string, path: string): Promise<{ status: number; body: Buffer }> {
+  const res = await fetch(`${BASE_URL}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  return { status: res.status, body: Buffer.from(await res.arrayBuffer()) };
+}
+
+async function getSplitAssetPaths(assetId: string) {
+  const [asset] = await queryDb<{ originalPath: string }>('SELECT "originalPath" FROM asset WHERE id = $1', [assetId]);
+  const files = await queryDb<{ type: string; path: string }>(
+    `SELECT type, path FROM asset_file WHERE "assetId" = $1 AND type IN ('thumbnail', 'preview') AND "isEdited" = false`,
+    [assetId],
+  );
+  const pathOf = (type: string) => files.find((file) => file.type === type)?.path ?? '';
+  return { originalPath: asset.originalPath, thumbnailPath: pathOf('thumbnail'), previewPath: pathOf('preview') };
+}
+
+async function phaseSplitAliases(): Promise<void> {
+  console.log('=== Phase: split-aliases ===');
+  const token = await loginAdmin();
+  minioSetupAlias();
+
+  for (let i = 0; i < 100; i++) {
+    createPng();
+  }
+  const content = createPng();
+  const { id } = await uploadAsset(token, 'split-aliases.png', content);
+  await waitForProcessing(token);
+
+  const before = await getSplitAssetPaths(id);
+  console.log(`  original=${before.originalPath} thumbnail=${before.thumbnailPath} preview=${before.previewPath}`);
+  assert.ok(isOnAlias(before.originalPath, 'originals-eu'), `Original not on originals-eu: ${before.originalPath}`);
+  assert.ok(
+    isOnAlias(before.thumbnailPath, 'previews-home'),
+    `Thumbnail not on previews-home: ${before.thumbnailPath}`,
+  );
+  assert.ok(isOnAlias(before.previewPath, 'previews-home'), `Preview not on previews-home: ${before.previewPath}`);
+  assert.ok(minioFileExists(before.originalPath), `Original missing from bucket A: ${before.originalPath}`);
+  assert.ok(minioFileExists(before.thumbnailPath), `Thumbnail missing from bucket B: ${before.thumbnailPath}`);
+  assert.ok(minioFileExists(before.previewPath), `Preview missing from bucket B: ${before.previewPath}`);
+  assert.ok(
+    !minioFileExists(`s3://previews-home/${keyOf(before.originalPath)}`),
+    'Original must not also be in bucket B',
+  );
+
+  const original = await fetchBytes(token, `/assets/${id}/original`);
+  assert.equal(original.status, 200, `Download returned ${original.status}`);
+  assert.equal(sha256(original.body), sha256(content), 'Downloaded original differs from the upload');
+  for (const [size, path] of [
+    ['thumbnail', before.thumbnailPath],
+    ['preview', before.previewPath],
+  ]) {
+    const view = await fetchBytes(token, `/assets/${id}/thumbnail?size=${size}`);
+    assert.equal(view.status, 200, `View ${size} returned ${view.status}`);
+    assert.equal(sha256(view.body), sha256(minioReadBytes(path)), `View ${size} differs from bucket B's object`);
+  }
+
+  console.log('  Moving originals from originals-eu to archive...');
+  await startMigration(token, 's3://archive', {
+    deleteSource: true,
+    fileTypes: {
+      originals: true,
+      thumbnails: false,
+      previews: false,
+      fullsize: false,
+      encodedVideos: false,
+      sidecars: false,
+      personThumbnails: false,
+      profileImages: false,
+    },
+  });
+  await waitForMigration(token);
+
+  const after = await getSplitAssetPaths(id);
+  assert.equal(after.originalPath, `s3://archive/${keyOf(before.originalPath)}`, 'Original not moved to archive');
+  assert.ok(minioFileExists(after.originalPath), `Original missing from bucket C: ${after.originalPath}`);
+  assert.ok(!minioFileExists(before.originalPath), `Original still in bucket A: ${before.originalPath}`);
+  assert.equal(after.thumbnailPath, before.thumbnailPath, 'Thumbnail must stay on previews-home');
+
+  const moved = await fetchBytes(token, `/assets/${id}/original`);
+  assert.equal(moved.status, 200, `Download after move returned ${moved.status}`);
+  assert.equal(sha256(moved.body), sha256(content), 'Downloaded original changed after the move');
+
+  saveState({ splitAssetId: id, splitContentHash: sha256(content) });
+  console.log('=== Phase: split-aliases complete ===');
+}
+
+// ---------------------------------------------------------------------------
+// Phase: unreachable-alias
+//
+// Runs after split-aliases with the previews-home endpoint pointing at a host
+// that does not resolve. The server must still start, a file on that alias must
+// fail with a clean 5xx (logged with its stored path), and files on the other
+// aliases must keep serving.
+// ---------------------------------------------------------------------------
+async function phaseUnreachableAlias(): Promise<void> {
+  console.log('=== Phase: unreachable-alias ===');
+  const startedAt = Date.now();
+  const ping = await api('GET', '/server/ping');
+  assert.equal(ping.res, 'pong', 'Server did not start with an unreachable alias');
+
+  const token = await loginAdmin();
+  const { splitAssetId: id, splitContentHash } = loadState();
+  assert.ok(id, 'split-aliases must run first');
+  const { thumbnailPath } = await getSplitAssetPaths(id);
+
+  const thumbnail = await fetchBytes(token, `/assets/${id}/thumbnail?size=thumbnail`);
+  assert.ok(thumbnail.status >= 500, `Thumbnail on the unreachable alias returned ${thumbnail.status}`);
+
+  const original = await fetchBytes(token, `/assets/${id}/original`);
+  assert.equal(original.status, 200, `Original on the reachable alias returned ${original.status}`);
+  assert.equal(sha256(original.body), splitContentHash, 'Original on the reachable alias changed');
+
+  const logs = captureContainerLogsSince('immich-server', startedAt);
+  assert.ok(logs.includes(`Unable to serve ${thumbnailPath}`), `No clear log line for ${thumbnailPath}`);
+  console.log('=== Phase: unreachable-alias complete ===');
+}
+
+// ---------------------------------------------------------------------------
 // Phase: video-trim-s3
 //
 // Covers gh#671. Trims a video on an S3-backed server and asserts every output
-// (edited encoded video + edited thumbnails) is persisted to MinIO as a relative
-// key, that the non-edited encoded object is not overwritten, and that nothing
+// (edited encoded video + edited thumbnails) is persisted to MinIO under the
+// default alias, that the non-edited encoded object is not overwritten, and that nothing
 // is left behind on the pod's local disk.
 //
 // Runs with the server in s3 write mode. Leaves suite state as it found it, so
@@ -2079,7 +2228,7 @@ async function phaseVideoTrimS3(): Promise<void> {
     assert.ok(assetRows[0], `Asset ${assetId} not found`);
     const { ownerId, originalPath } = assetRows[0];
     assert.ok(assetRows[0].duration, 'Asset duration was not probed — editAsset would reject the trim');
-    assert.ok(!originalPath.startsWith('/'), `Expected S3 (relative) originalPath, got ${originalPath}`);
+    assert.ok(isOnAlias(originalPath), `Expected S3 originalPath, got ${originalPath}`);
 
     // Precondition 2: a NON-edited EncodedVideo exists in S3.
     // NB: the asset_file.type enum value is 'encoded_video', not 'encodedVideo'.
@@ -2089,9 +2238,9 @@ async function phaseVideoTrimS3(): Promise<void> {
     );
     assert.equal(encodedRows.length, 1, `Expected 1 non-edited encoded_video row, got ${encodedRows.length}`);
     const nonEditedKey = encodedRows[0].path;
-    assert.ok(!nonEditedKey.startsWith('/'), `Expected relative encoded_video path, got ${nonEditedKey}`);
+    assert.ok(isOnAlias(nonEditedKey), `Expected an S3 encoded_video path, got ${nonEditedKey}`);
     assert.ok(minioFileExists(nonEditedKey), `Non-edited encoded video missing from MinIO: ${nonEditedKey}`);
-    const nonEditedStatBefore = dockerExec('minio', `mc stat local/immich-test/${nonEditedKey}`);
+    const nonEditedStatBefore = dockerExec('minio', `mc stat ${minioObject(nonEditedKey)}`);
     console.log(`  Precondition OK: transcoded video in S3 at ${nonEditedKey}`);
 
     // Act: trim 1s..3s out of the 4s video.
@@ -2112,14 +2261,14 @@ async function phaseVideoTrimS3(): Promise<void> {
     );
 
     for (const row of editedRows) {
-      assert.ok(!row.path.startsWith('/'), `Edited ${row.type} path must be an S3 key, got ${row.path}`);
+      assert.ok(isOnAlias(row.path), `Edited ${row.type} path must be an S3 key, got ${row.path}`);
       assert.ok(minioFileExists(row.path), `Edited ${row.type} missing from MinIO: ${row.path}`);
     }
 
     const editedVideo = editedRows.find((r) => r.type === 'encoded_video');
     assert.ok(editedVideo, 'No edited encoded_video row');
     const expectedKey = `encoded-video/${ownerId}/${assetId.slice(0, 2)}/${assetId.slice(2, 4)}/${assetId}_edited.mp4`;
-    assert.equal(editedVideo.path, expectedKey, 'Edited encoded video key mismatch');
+    assert.equal(editedVideo.path, `s3://default/${expectedKey}`, 'Edited encoded video key mismatch');
     assert.notEqual(editedVideo.path, nonEditedKey, 'Edited video must not reuse the non-edited key');
 
     for (const row of editedRows) {
@@ -2131,7 +2280,7 @@ async function phaseVideoTrimS3(): Promise<void> {
 
     // Collision guard: the transcoded original must be untouched.
     assert.ok(minioFileExists(nonEditedKey), 'Non-edited encoded video disappeared');
-    const nonEditedStatAfter = dockerExec('minio', `mc stat local/immich-test/${nonEditedKey}`);
+    const nonEditedStatAfter = dockerExec('minio', `mc stat ${minioObject(nonEditedKey)}`);
     assert.equal(nonEditedStatAfter, nonEditedStatBefore, 'Non-edited encoded video was overwritten by the trim');
 
     // No local leftovers: persistFile must upload AND unlink.
@@ -2284,9 +2433,17 @@ async function main() {
         await phaseVideoTrimS3();
         break;
       }
+      case 'split-aliases': {
+        await phaseSplitAliases();
+        break;
+      }
+      case 'unreachable-alias': {
+        await phaseUnreachableAlias();
+        break;
+      }
       default: {
         throw new Error(
-          `Unknown phase: ${phase}. Valid phases: setup, estimate, migrate-to-s3, migrate-to-disk, rollback, no-files, concurrent-rejection, selective-to-s3, selective-cleanup, delete-source-false, content-verify, sidecar-verify, template-s3-bulk-skipped, template-s3-upload-skipped, template-s3-live-photo-skipped, template-s3-sidecar-skipped, template-s3-queue-migration-skipped, template-disk-baseline, copy-asset-sidecar-s3, user-delete-s3-orphans, video-trim-s3`,
+          `Unknown phase: ${phase}. Valid phases: setup, estimate, migrate-to-s3, migrate-to-disk, rollback, no-files, concurrent-rejection, selective-to-s3, selective-cleanup, delete-source-false, content-verify, sidecar-verify, template-s3-bulk-skipped, template-s3-upload-skipped, template-s3-live-photo-skipped, template-s3-sidecar-skipped, template-s3-queue-migration-skipped, template-disk-baseline, copy-asset-sidecar-s3, user-delete-s3-orphans, video-trim-s3, split-aliases, unreachable-alias`,
         );
       }
     }

@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [options]"
       echo "  --cleanup       Tear down infrastructure after run"
       echo "  --no-cleanup    Keep infrastructure running (default)"
-      echo "  --phase <name>  Run only a specific phase (setup, migrate-to-s3, migrate-to-disk)"
+      echo "  --phase <name>  Run only a specific phase (setup, migrate-to-s3, migrate-to-disk, split-aliases, unreachable-alias)"
       echo "  --verbose       Show docker logs inline"
       exit 0
       ;;
@@ -53,6 +53,14 @@ restart_server() {
   local backend=$1
   log "Restarting server with IMMICH_STORAGE_BACKEND=$backend"
   IMMICH_STORAGE_BACKEND=$backend $COMPOSE up -d immich-server
+  sleep 3
+  wait_for_server
+}
+
+# Restarts the server with the given VAR=value settings in its environment.
+restart_server_with() {
+  log "Restarting server with $*"
+  env "$@" $COMPOSE up -d immich-server
   sleep 3
   wait_for_server
 }
@@ -92,9 +100,9 @@ else
   $COMPOSE up -d --build
   wait_for_server
 
-  echo "Creating MinIO bucket..."
+  echo "Creating MinIO buckets..."
   $COMPOSE exec -T minio sh -c \
-    "mc alias set local http://localhost:9000 minioadmin minioadmin && mc mb local/immich-test --ignore-existing"
+    "mc alias set local http://localhost:9000 minioadmin minioadmin && for b in immich-test immich-originals immich-previews immich-archive; do mc mb local/\$b --ignore-existing; done"
 
   run_phase setup
 
@@ -104,6 +112,17 @@ else
 
   restart_server disk
   run_phase migrate-to-disk
+
+  SPLIT=(
+    IMMICH_STORAGE_ALIASES=originals-eu,previews-home,archive
+    IMMICH_STORAGE_WRITE_ORIGINALS=s3://originals-eu
+    IMMICH_STORAGE_WRITE_DERIVATIVES=s3://previews-home
+  )
+  restart_server_with "${SPLIT[@]}"
+  run_phase split-aliases
+
+  restart_server_with "${SPLIT[@]}" PREVIEWS_HOME_ENDPOINT=http://unreachable.invalid:9000
+  run_phase unreachable-alias
 
   log "ALL PHASES PASSED"
 fi
