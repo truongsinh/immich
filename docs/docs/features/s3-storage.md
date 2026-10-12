@@ -8,11 +8,17 @@ If you have existing files on disk, you can migrate them to S3 using the built-i
 
 ## How It Works
 
+Every stored file path names its storage:
+
+- `file:///usr/src/app/upload/library/user/file.jpg` is a file on disk.
+- `s3://<alias>/library/user/file.jpg` is an object on the S3 alias `<alias>`. The bucket, endpoint and credentials live in the alias configuration, not in the path.
+
 When S3 storage is enabled:
 
-- **New uploads** (photos, videos, thumbnails, transcoded videos, profile images) are written to your S3 bucket.
-- **Existing files** on disk keep being served from disk. Both backends run at the same time.
-- The [Storage Template](/administration/storage-template) determines the S3 object key at upload time.
+- **New files** go to the write target for their kind: originals, sidecars and profile images to one target, generated files (thumbnails, previews, full-size images, encoded videos, person thumbnails) to another. Both can be the same.
+- **Existing files** keep being served from wherever their path says they are. Disk and every configured alias are active at the same time.
+- An alias that cannot be reached does not stop Gallery from starting. Requests for files on it fail with a 5xx and a server log line naming the stored path; files on disk and on other aliases keep being served.
+- The [Storage Template](/administration/storage-template) only moves files on disk; files on an S3 alias are skipped.
 
 Gallery supports two modes for serving files from S3:
 
@@ -33,8 +39,8 @@ All S3 variables are set on the `immich-server` container.
 
 | Variable                         | Description                                                                                                                   |   Default   | Required          |
 | :------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :---------: | :---------------- |
-| `IMMICH_STORAGE_BACKEND`         | Storage backend for new uploads (`disk` or `s3`)                                                                              |   `disk`    | Yes (set to `s3`) |
-| `IMMICH_S3_BUCKET`               | S3 bucket name                                                                                                                |             | Yes               |
+| `IMMICH_STORAGE_BACKEND`         | Legacy write target for all new files: `s3` writes to `s3://default`, `disk` to `file://`                                     |   `disk`    | Yes (set to `s3`) |
+| `IMMICH_S3_BUCKET`               | Bucket of the `default` alias                                                                                                 |             | Yes               |
 | `IMMICH_S3_REGION`               | AWS region (or region of your S3-compatible provider)                                                                         | `us-east-1` | No                |
 | `IMMICH_S3_ENDPOINT`             | Custom endpoint URL for S3-compatible services (e.g. MinIO, R2)                                                               |             | No<sup>\*1</sup>  |
 | `IMMICH_S3_ACCESS_KEY_ID`        | Access key ID                                                                                                                 |             | No<sup>\*2</sup>  |
@@ -45,6 +51,45 @@ All S3 variables are set on the `immich-server` container.
 \*1: Required for non-AWS S3-compatible services (MinIO, R2, B2, etc.). Omit for AWS S3.
 
 \*2: If omitted, the AWS SDK falls back to IAM role credentials (e.g. EC2 instance roles, ECS task roles, IRSA on EKS). For non-AWS services, these are typically required.
+
+These settings define the S3 alias named `default`. With `IMMICH_STORAGE_BACKEND=s3` all new files are written to `s3://default`; with `disk` (or unset) they are written to disk (`file://`).
+
+### Several Buckets
+
+You can name more S3 aliases, each with its own bucket, endpoint, credentials and serve mode, and choose where each kind of new file goes. Name aliases by their role, for example `originals-eu` and `previews-home`.
+
+| Variable                                 | Description                                                                                                              |       Default       |
+| :--------------------------------------- | :----------------------------------------------------------------------------------------------------------------------- | :-----------------: |
+| `IMMICH_STORAGE_ALIASES`                 | Comma-separated alias names (lowercase letters, digits and dashes)                                                       |                     |
+| `IMMICH_S3_<ALIAS>_BUCKET`               | Bucket of the alias (required)                                                                                           |                     |
+| `IMMICH_S3_<ALIAS>_ENDPOINT`             | Endpoint of the alias                                                                                                    |                     |
+| `IMMICH_S3_<ALIAS>_REGION`               | Region of the alias                                                                                                      |     `us-east-1`     |
+| `IMMICH_S3_<ALIAS>_ACCESS_KEY_ID`        | Access key ID of the alias                                                                                               |                     |
+| `IMMICH_S3_<ALIAS>_SECRET_ACCESS_KEY`    | Secret access key of the alias                                                                                           |                     |
+| `IMMICH_S3_<ALIAS>_SERVE_MODE`           | `redirect` or `proxy`, per alias                                                                                         |     `redirect`      |
+| `IMMICH_S3_<ALIAS>_PRESIGNED_URL_EXPIRY` | Presigned URL expiration time in seconds, per alias                                                                      |       `3600`        |
+| `IMMICH_STORAGE_WRITE_ORIGINALS`         | Target for new originals, sidecars and profile images: `file://` or `s3://<alias>`                                       | from legacy backend |
+| `IMMICH_STORAGE_WRITE_DERIVATIVES`       | Target for new thumbnails, previews, full-size images, encoded videos and person thumbnails: `file://` or `s3://<alias>` | from legacy backend |
+
+`<ALIAS>` is the alias name upper-cased with `-` mapped to `_`: the alias `originals-eu` reads `IMMICH_S3_ORIGINALS_EU_BUCKET`. A write target set explicitly overrides `IMMICH_STORAGE_BACKEND`. A write target that names an alias that is not configured stops startup.
+
+```bash title=".env"
+IMMICH_STORAGE_ALIASES=originals-eu,previews-home
+IMMICH_S3_ORIGINALS_EU_ENDPOINT=https://s3.eu-central-1.amazonaws.com
+IMMICH_S3_ORIGINALS_EU_BUCKET=gallery-originals
+IMMICH_S3_ORIGINALS_EU_REGION=eu-central-1
+IMMICH_S3_ORIGINALS_EU_ACCESS_KEY_ID=your-access-key
+IMMICH_S3_ORIGINALS_EU_SECRET_ACCESS_KEY=your-secret-key
+IMMICH_S3_PREVIEWS_HOME_ENDPOINT=http://minio:9000
+IMMICH_S3_PREVIEWS_HOME_BUCKET=gallery-previews
+IMMICH_S3_PREVIEWS_HOME_ACCESS_KEY_ID=minioadmin
+IMMICH_S3_PREVIEWS_HOME_SECRET_ACCESS_KEY=minioadmin
+IMMICH_S3_PREVIEWS_HOME_SERVE_MODE=proxy
+IMMICH_STORAGE_WRITE_ORIGINALS=s3://originals-eu
+IMMICH_STORAGE_WRITE_DERIVATIVES=s3://previews-home
+```
+
+Disk mount checks at startup only run for the folders whose target is disk; the upload staging and backup folders are always checked.
 
 ## Setup Guide
 
@@ -360,7 +405,10 @@ Yes. Use the built-in [Storage Migration](/features/storage-migration) tool. It 
 No. Gallery uses presigned URLs (in `redirect` mode) or proxies the files through the server (in `proxy` mode). The bucket should remain private.
 
 **What happens if I switch back to disk storage?**
-Files already stored in S3 will continue to be served from S3. Only new uploads will go to disk. Both backends are always active.
+Files already stored in S3 will continue to be served from S3. Only new files will go to disk. Disk and every configured alias are always active.
+
+**Can I remove an alias?**
+Only after moving every file off it with the [Storage Migration](/features/storage-migration) tool. A stored path on an alias that is no longer configured is refused with an error naming it.
 
 **Can I use IAM roles instead of access keys?**
 Yes. If you omit `IMMICH_S3_ACCESS_KEY_ID` and `IMMICH_S3_SECRET_ACCESS_KEY`, the AWS SDK will use the standard credential chain (environment variables, IAM roles, instance metadata, etc.).
@@ -395,16 +443,18 @@ S3 support is built on a `StorageBackend` interface that both the disk and S3 ba
                                       └───────────────────┘
 ```
 
-The `StorageService` manages both backends as static singletons and routes operations based on the file path format.
+The `StorageService` holds the disk backend and one S3 backend per configured alias, and routes operations based on the scheme of the stored path.
 
 ### Dual Backend Routing
 
-The **file path format decides the backend**:
+The **stored path names the backend**:
 
-- **Absolute paths** such as `/usr/src/app/upload/library/user/file.jpg` are legacy disk files and route to the disk backend.
-- **Relative paths** such as `library/user/file.jpg` are S3 files and route to the S3 backend.
+- `file:///usr/src/app/upload/library/user/file.jpg` routes to the disk backend with the absolute path `/usr/src/app/upload/library/user/file.jpg`.
+- `s3://originals-eu/library/user/file.jpg` routes to the backend of the alias `originals-eu` with the object key `library/user/file.jpg`.
 
-So no database schema change was needed. The existing `originalPath`, `path`, `thumbnailPath`, and `profileImagePath` columns store either format, and `resolveBackendForKey()` dispatches to the correct backend at runtime. Both backends are always active; `IMMICH_STORAGE_BACKEND` only controls where **new writes** go.
+A path is split without a URL parser: after `s3://`, everything up to the first `/` is the alias and the rest is the key, unchanged (no percent-encoding, so `?`, `#`, `%`, spaces and Unicode survive). A path without a scheme, or on an alias that is not configured, is refused with an error naming it. One function turns every stored path into its backend and key.
+
+The `originalPath`, `path`, `thumbnailPath` and `profileImagePath` columns hold these URIs, as do the storage migration log and the integrity report. A one-off database migration gave every existing path a scheme: absolute disk paths became `file://<path>` and relative S3 keys became `s3://default/<key>`. The write targets only control where **new files** go.
 
 ### Serve Modes
 
@@ -422,15 +472,15 @@ The S3 backend uses `forcePathStyle: true` when a custom endpoint is configured,
 
 ### Upload Flow
 
-When S3 is the write backend, uploads follow this path:
+When the originals target is an S3 alias, uploads follow this path:
 
 1. File is uploaded to a local temp directory (standard NestJS multipart handling).
-2. The storage template generates a relative key for the S3 object.
+2. Gallery builds the object key for the S3 object under the originals target's alias.
 3. The file is uploaded to S3 using the `@aws-sdk/lib-storage` `Upload` class (supports automatic multipart for large files).
-4. The database is updated with the relative path.
+4. The database is updated with the `s3://<alias>/<key>` path.
 5. A cleanup job deletes the local temp file.
 
-Profile images (both user-uploaded and OAuth-synced) follow the same pattern: the file is written to disk first, then uploaded to S3 if the write backend is S3, and the local temp file is cleaned up.
+Profile images (both user-uploaded and OAuth-synced) follow the same pattern: the file is written to disk first, then uploaded to S3 if the originals target is an S3 alias, and the local temp file is cleaned up.
 
 For operations that require filesystem access (ffmpeg transcoding, exiftool metadata extraction), the S3 backend provides a `downloadToTemp()` method that streams the object to a local temp file and returns a cleanup function.
 
@@ -440,6 +490,6 @@ Album downloads, selection downloads and shared-link archives all work with both
 
 ### Cleanup Behavior
 
-Deleting a user removes that user's storage prefix from the active backend. On S3, Gallery lists and deletes all objects under the user's prefix; on disk, it removes the matching directory tree. The cleanup is idempotent, so rerunning a failed delete is safe.
+Deleting a user removes that user's storage prefix from disk and from every configured alias. On S3, Gallery lists and deletes all objects under the user's prefix; on disk, it removes the matching directory tree. The cleanup is idempotent, so rerunning a failed delete is safe.
 
-Sidecar copy operations also respect the target asset's backend. Copying XMP metadata from one asset to another downloads the source sidecar to a temporary local file when needed, then writes the target sidecar either to disk or to the relative S3 key for that asset.
+Sidecar copy operations also respect the target asset's backend. Copying XMP metadata from one asset to another downloads the source sidecar to a temporary local file when needed, then writes the target sidecar next to the target asset's original, on disk or on its S3 alias.

@@ -212,16 +212,28 @@ Additional machine learning parameters can be tuned from the admin UI.
 
 ## S3 Storage
 
-| Variable                         | Description                                                                                                                   |   Default   | Containers | Workers            |
-| :------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :---------: | :--------- | :----------------- |
-| `IMMICH_STORAGE_BACKEND`         | Storage backend for new uploads (`disk` or `s3`)                                                                              |   `disk`    | server     | api, microservices |
-| `IMMICH_S3_BUCKET`               | S3 bucket name                                                                                                                |             | server     | api, microservices |
-| `IMMICH_S3_REGION`               | AWS region or S3-compatible provider region                                                                                   | `us-east-1` | server     | api, microservices |
-| `IMMICH_S3_ENDPOINT`             | Custom endpoint URL for S3-compatible services                                                                                |             | server     | api, microservices |
-| `IMMICH_S3_ACCESS_KEY_ID`        | Access key ID (falls back to IAM role if omitted)                                                                             |             | server     | api, microservices |
-| `IMMICH_S3_SECRET_ACCESS_KEY`    | Secret access key (falls back to IAM role if omitted)                                                                         |             | server     | api, microservices |
-| `IMMICH_S3_PRESIGNED_URL_EXPIRY` | Presigned URL expiration time in seconds                                                                                      |   `3600`    | server     | api, microservices |
-| `IMMICH_S3_SERVE_MODE`           | How to serve S3 assets: use `redirect` for normal deployments; `proxy` is the fallback when browsers cannot reach S3 directly | `redirect`  | server     | api, microservices |
+| Variable                                 | Description                                                                                                                     |            Default            | Containers | Workers            |
+| :--------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------ | :---------------------------: | :--------- | :----------------- |
+| `IMMICH_STORAGE_BACKEND`                 | Legacy write target for all new files: `s3` writes to `s3://default`, `disk` to `file://`                                       |            `disk`             | server     | api, microservices |
+| `IMMICH_S3_BUCKET`                       | Bucket of the `default` alias                                                                                                   |                               | server     | api, microservices |
+| `IMMICH_S3_REGION`                       | AWS region or S3-compatible provider region                                                                                     |          `us-east-1`          | server     | api, microservices |
+| `IMMICH_S3_ENDPOINT`                     | Custom endpoint URL for S3-compatible services                                                                                  |                               | server     | api, microservices |
+| `IMMICH_S3_ACCESS_KEY_ID`                | Access key ID (falls back to IAM role if omitted)                                                                               |                               | server     | api, microservices |
+| `IMMICH_S3_SECRET_ACCESS_KEY`            | Secret access key (falls back to IAM role if omitted)                                                                           |                               | server     | api, microservices |
+| `IMMICH_S3_PRESIGNED_URL_EXPIRY`         | Presigned URL expiration time in seconds                                                                                        |            `3600`             | server     | api, microservices |
+| `IMMICH_S3_SERVE_MODE`                   | How to serve S3 assets: use `redirect` for normal deployments; `proxy` is the fallback when browsers cannot reach S3 directly   |          `redirect`           | server     | api, microservices |
+| `IMMICH_STORAGE_ALIASES`                 | Comma-separated names of extra S3 aliases (lowercase letters, digits and dashes), e.g. `originals-eu,previews-home`             |                               | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_BUCKET`               | Bucket of the alias. `<ALIAS>` is the alias name upper-cased with `-` mapped to `_`, e.g. `IMMICH_S3_ORIGINALS_EU_BUCKET`       |                               | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_ENDPOINT`             | Endpoint of the alias                                                                                                           |                               | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_REGION`               | Region of the alias                                                                                                             |          `us-east-1`          | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_ACCESS_KEY_ID`        | Access key ID of the alias                                                                                                      |                               | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_SECRET_ACCESS_KEY`    | Secret access key of the alias                                                                                                  |                               | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_SERVE_MODE`           | Serve mode of the alias (`redirect` or `proxy`)                                                                                 |          `redirect`           | server     | api, microservices |
+| `IMMICH_S3_<ALIAS>_PRESIGNED_URL_EXPIRY` | Presigned URL expiration time in seconds for the alias                                                                          |            `3600`             | server     | api, microservices |
+| `IMMICH_STORAGE_WRITE_ORIGINALS`         | Where new originals, sidecars and profile images are written: `file://` or `s3://<alias>`                                       | from `IMMICH_STORAGE_BACKEND` | server     | api, microservices |
+| `IMMICH_STORAGE_WRITE_DERIVATIVES`       | Where new thumbnails, previews, full-size images, encoded videos and person thumbnails are written: `file://` or `s3://<alias>` | from `IMMICH_STORAGE_BACKEND` | server     | api, microservices |
+
+The legacy `IMMICH_S3_*` settings define the S3 alias named `default`. A write target that names an alias that is not configured stops startup. See [S3-Compatible Storage](/features/s3-storage#several-buckets) for how aliases and write targets fit together.
 
 :::info
 If you use `IMMICH_S3_SERVE_MODE=redirect`, configure bucket CORS for your Gallery origins before switching an existing deployment over. Without that, redirected media can display but canvas-based workflows such as editing, face crops, and copy-to-clipboard can fail. For the required CORS policy and rollout steps, see the [S3-Compatible Storage](/features/s3-storage) guide.

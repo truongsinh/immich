@@ -1,10 +1,10 @@
 # Storage Migration
 
-Noodle Gallery has a built-in tool for moving files between disk and S3-compatible object storage. It runs in both directions: all your existing files from disk to S3, or from S3 back to disk.
+Noodle Gallery has a built-in tool for moving files between disk and S3-compatible object storage. You name a target, either disk (`file://`) or a configured S3 alias (`s3://<alias>`), and every selected file that is not already there is moved to it: from disk to S3, from S3 back to disk, or from one S3 alias to another.
 
 ## Features
 
-- Migrates in both directions, disk to S3 or S3 to disk.
+- Moves files to disk or to any configured S3 alias, including between two S3 aliases.
 - You choose which file types to move: originals, thumbnails, previews, full-size images, encoded videos, sidecars, person thumbnails and profile images.
 - An estimate before you start shows file counts and the data size to expect.
 - An interrupted migration resumes. Start it again and the files already migrated are skipped.
@@ -15,13 +15,9 @@ Noodle Gallery has a built-in tool for moving files between disk and S3-compatib
 
 ## Prerequisites
 
-1. Configure S3 storage. Set up your S3 environment variables as described in the [S3 Storage documentation](/features/s3-storage).
+1. Configure every S3 alias involved, as source or target, as described in the [S3 Storage documentation](/features/s3-storage). A migration to an alias that is not configured is refused.
 
-2. Set `IMMICH_STORAGE_BACKEND` to match the migration direction:
-   - To migrate to S3: set `IMMICH_STORAGE_BACKEND=s3`
-   - To migrate to disk: set `IMMICH_STORAGE_BACKEND=disk`
-
-   New uploads made during the migration then go to the correct backend.
+2. Optionally point the write targets (`IMMICH_STORAGE_WRITE_ORIGINALS`, `IMMICH_STORAGE_WRITE_DERIVATIVES`) at the migration target, so files uploaded during the migration land there too. The migration itself does not depend on them.
 
 3. Restart Gallery after changing environment variables.
 
@@ -30,7 +26,7 @@ Noodle Gallery has a built-in tool for moving files between disk and S3-compatib
 ### Starting a Migration
 
 1. Go to **Administration > Storage Migration** in the web UI.
-2. Select the migration direction (Disk to S3 or S3 to Disk).
+2. Enter the migration target: `file://` for disk, or `s3://<alias>` for a configured S3 alias (for example `s3://default`).
 3. Click **Get Estimate** to see how many files will be migrated and the estimated data size.
 4. Choose which file types to include (all are selected by default).
 5. Set the concurrency level (default: 5). Higher values migrate faster but use more resources.
@@ -53,7 +49,7 @@ If you need to undo a migration:
 3. Click **Rollback**. This reverts all database path changes for that batch.
 
 :::warning
-Rollback only reverts the **database paths**. If you enabled "delete source files" during the migration, the original files are gone and rollback cannot bring them back. To fully revert, run a migration in the opposite direction.
+Rollback only reverts the **database paths**. If you enabled "delete source files" during the migration, the original files are gone and rollback cannot bring them back. To fully revert, run a migration back to the original target.
 :::
 
 ## Using the API
@@ -63,10 +59,10 @@ The migration tool exposes four API endpoints under `/storage-migration`:
 ### Get Estimate
 
 ```
-GET /storage-migration/estimate?direction=toS3
+GET /storage-migration/estimate?target=s3%3A%2F%2Fdefault
 ```
 
-Returns file counts by type and estimated total size in bytes.
+Returns the `target`, file counts by type for files not yet on that target, and the estimated total size in bytes.
 
 ### Start Migration
 
@@ -75,7 +71,7 @@ POST /storage-migration/start
 Content-Type: application/json
 
 {
-  "direction": "toS3",
+  "target": "s3://default",
   "deleteSource": false,
   "concurrency": 5,
   "fileTypes": {
@@ -132,7 +128,7 @@ Migrations are tracked in a dedicated `storage_migration_log` table:
 │ fileType (varchar?)         │  'original', 'thumbnail', 'preview', etc.
 │ oldPath (text)              │
 │ newPath (text)              │
-│ direction (varchar)         │  'toS3' or 'toDisk'
+│ target (varchar)            │  'file://' or 's3://<alias>'
 │ batchId (UUID, indexed)     │
 │ migratedAt (timestamp)      │
 └─────────────────────────────┘
@@ -165,12 +161,11 @@ The orchestrator job streams file records from 8 sources (assets, asset files by
 
 ### Path Transformation
 
-The migration converts between absolute disk paths and relative S3 keys:
+Every stored path names its storage (see [dual backend routing](/features/s3-storage#dual-backend-routing)), and the migration stores the new path with the target's scheme:
 
-- Disk to S3: strip the media location prefix, so `/usr/src/app/upload/library/...` becomes `library/...`
-- S3 to Disk: prepend the media location prefix
-
-The S3 storage backend uses relative paths, the disk backend absolute ones. That convention lets [dual backend routing](/features/s3-storage#dual-backend-routing) work transparently.
+- Disk to S3: strip the media location prefix, so `file:///usr/src/app/upload/library/...` becomes `s3://<alias>/library/...`
+- S3 to S3: keep the object key, so `s3://default/library/...` becomes `s3://archive/library/...`
+- S3 to disk: join the key under the media location, so `s3://default/library/...` becomes `file:///usr/src/app/upload/library/...`
 
 ### Concurrency Safety
 
@@ -178,4 +173,4 @@ Each per-file job uses **optimistic concurrency** when updating the database: th
 
 ### Rollback
 
-Rollback reads every log entry for a given `batchId` and reverses each path update with the same optimistic concurrency pattern (UPDATE WHERE path = newPath, SET path = oldPath). If all reversals succeed, the log entries for that batch are deleted. If any fail, the log is kept for debugging. Rollback never moves files. It only reverts database paths, so if source files were deleted during the migration you need a migration in the opposite direction to bring the files back.
+Rollback reads every log entry for a given `batchId` and reverses each path update with the same optimistic concurrency pattern (UPDATE WHERE path = newPath, SET path = oldPath). If all reversals succeed, the log entries for that batch are deleted. If any fail, the log is kept for debugging. Rollback never moves files. It only reverts database paths, so if source files were deleted during the migration you need a migration back to the original target to bring the files back.
