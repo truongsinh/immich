@@ -21902,16 +21902,17 @@
     },
     "/storage-migration/estimate": {
       "get": {
-        "description": "Estimate the number of files and approximate size that would be migrated for the given direction.",
+        "description": "Estimate the number of files and approximate size that would be migrated to the given target.",
         "operationId": "getEstimate",
         "parameters": [
           {
-            "name": "direction",
+            "name": "target",
             "required": true,
             "in": "query",
-            "description": "Migration direction",
+            "description": "Storage to move files to: file:// for disk, or s3://<alias> for a configured S3 alias",
             "schema": {
-              "$ref": "#/components/schemas/StorageMigrationDirection"
+              "pattern": "^(file:\\/\\/|s3:\\/\\/[a-z0-9][a-z0-9-]*)$",
+              "type": "string"
             }
           }
         ],
@@ -22004,7 +22005,7 @@
     },
     "/storage-migration/start": {
       "post": {
-        "description": "Start a storage backend migration job to move files between disk and S3 storage.",
+        "description": "Start a storage backend migration job to move files to disk or to an S3 alias.",
         "operationId": "start",
         "parameters": [],
         "requestBody": {
@@ -42476,13 +42477,6 @@
         ],
         "type": "string"
       },
-      "StorageMigrationDirection": {
-        "enum": [
-          "toS3",
-          "toDisk"
-        ],
-        "type": "string"
-      },
       "StorageMigrationFileTypesDto": {
         "properties": {
           "encodedVideos": {
@@ -42542,18 +42536,19 @@
             "description": "Delete source files after migration",
             "type": "boolean"
           },
-          "direction": {
-            "$ref": "#/components/schemas/StorageMigrationDirection",
-            "description": "Migration direction"
-          },
           "fileTypes": {
             "$ref": "#/components/schemas/StorageMigrationFileTypesDto",
             "description": "File types to migrate"
+          },
+          "target": {
+            "description": "Storage to move files to: file:// for disk, or s3://<alias> for a configured S3 alias",
+            "pattern": "^(file:\\/\\/|s3:\\/\\/[a-z0-9][a-z0-9-]*)$",
+            "type": "string"
           }
         },
         "required": [
-          "direction",
-          "fileTypes"
+          "fileTypes",
+          "target"
         ],
         "type": "object"
       },

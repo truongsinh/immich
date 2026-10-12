@@ -4186,10 +4186,10 @@ export type StorageMigrationStartDto = {
     concurrency?: number;
     /** Delete source files after migration */
     deleteSource?: boolean;
-    /** Migration direction */
-    direction: StorageMigrationDirection;
     /** File types to migrate */
     fileTypes: StorageMigrationFileTypesDto;
+    /** Storage to move files to: file:// for disk, or s3://<alias> for a configured S3 alias */
+    target: string;
 };
 export type SyncAckDeleteDto = {
     /** Sync entity types to delete acks for */
@@ -10107,11 +10107,11 @@ export function removeAssetFromStack({ assetId, id }: {
 /**
  * Get storage migration estimate
  */
-export function getEstimate({ direction }: {
-    direction: StorageMigrationDirection;
+export function getEstimate({ target }: {
+    target: string;
 }, opts?: Oazapfts.RequestOpts) {
     return oazapfts.ok(oazapfts.fetchText(`/storage-migration/estimate${QS.query(QS.explode({
-        direction
+        target
     }))}`, {
         ...opts
     }));
@@ -11825,10 +11825,6 @@ export enum SharedSpaceRole {
 export enum RepresentativeFaceSource {
     Auto = "auto",
     Manual = "manual"
-}
-export enum StorageMigrationDirection {
-    ToS3 = "toS3",
-    ToDisk = "toDisk"
 }
 export enum SyncEntityType {
     AuthUserV1 = "AuthUserV1",

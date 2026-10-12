@@ -2,7 +2,6 @@
   import AdminPageLayout from '$lib/components/layouts/AdminPageLayout.svelte';
   import { handleError } from '$lib/utils/handle-error';
   import {
-    StorageMigrationDirection,
     getEstimate as getEstimateRaw,
     getStatus as getStatusRaw,
     start as startMigrationRaw,
@@ -33,7 +32,7 @@
   }
 
   interface EstimateResponse {
-    direction: string;
+    target: string;
     fileCounts: FileCounts;
     estimatedSizeBytes: number;
   }
@@ -48,8 +47,8 @@
     paused: number;
   }
 
-  // StorageMigrationDirection
-  let direction: StorageMigrationDirection = $state(StorageMigrationDirection.ToS3);
+  // file:// for disk, s3://<alias> for a configured S3 alias
+  let target = $state('s3://default');
 
   // File types
   let originals = $state(true);
@@ -100,7 +99,7 @@
   async function fetchEstimate() {
     loadingEstimate = true;
     try {
-      const text = await getEstimateRaw({ direction });
+      const text = await getEstimateRaw({ target });
       estimate = JSON.parse(text) as EstimateResponse;
     } catch (error) {
       handleError(error, $t('admin.storage_migration_fetch_estimate_failed'));
@@ -125,7 +124,7 @@
     starting = true;
     try {
       const dto: StorageMigrationStartDto = {
-        direction,
+        target,
         deleteSource,
         concurrency,
         fileTypes: {
@@ -175,9 +174,9 @@
   });
 
   $effect(() => {
-    // Re-fetch estimate when direction changes
+    // Re-fetch estimate when the target changes
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    direction;
+    target;
     if (mounted) {
       void fetchEstimate();
     }
@@ -187,24 +186,17 @@
 <AdminPageLayout breadcrumbs={[{ title: data.meta.title }]}>
   <Container size="medium" center>
     <div class="flex flex-col gap-8 pb-28">
-      <!-- Migration direction -->
+      <!-- Migration target -->
       <section class="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-900">
-        <h2 class="mb-4 text-lg font-semibold">{$t('admin.storage_migration_direction')}</h2>
-        <div class="flex gap-6">
-          <label class="flex cursor-pointer items-center gap-2">
-            <input type="radio" bind:group={direction} value={StorageMigrationDirection.ToS3} class="accent-primary" />
-            <span>{$t('admin.storage_migration_disk_to_s3')}</span>
-          </label>
-          <label class="flex cursor-pointer items-center gap-2">
-            <input
-              type="radio"
-              bind:group={direction}
-              value={StorageMigrationDirection.ToDisk}
-              class="accent-primary"
-            />
-            <span>{$t('admin.storage_migration_s3_to_disk')}</span>
-          </label>
-        </div>
+        <h2 class="mb-4 text-lg font-semibold">{$t('admin.storage_migration_target')}</h2>
+        <input
+          type="text"
+          bind:value={target}
+          aria-label={$t('admin.storage_migration_target')}
+          placeholder="s3://default"
+          class="w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 font-mono dark:border-gray-600"
+        />
+        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{$t('admin.storage_migration_target_description')}</p>
       </section>
 
       <!-- File Types -->
