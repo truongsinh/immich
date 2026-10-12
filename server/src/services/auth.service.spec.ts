@@ -1142,16 +1142,15 @@ describe(AuthService.name, () => {
           put: vi.fn().mockResolvedValue(void 0),
           getServeStrategy: vi.fn(),
         };
-        (StorageService as any).s3Backend = mockS3Backend;
-        (StorageService as any).writeBackendType = 's3';
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockS3Backend]]) as any);
       });
 
       afterEach(() => {
-        (StorageService as any).s3Backend = void 0;
-        (StorageService as any).writeBackendType = 'disk';
+        vi.restoreAllMocks();
       });
 
-      it('should upload OAuth profile picture to S3 and store relative path', async () => {
+      it('should upload OAuth profile picture to S3 and store its S3 URI', async () => {
         const fileId = newUuid();
         const user = UserFactory.create({ oauthId: 'oauth-id' });
         const profile = OAuthProfileFactory.create({ picture: 'https://auth.immich.cloud/profiles/1.jpg' });
@@ -1177,7 +1176,7 @@ describe(AuthService.name, () => {
           contentType: 'image/webp',
         });
         expect(mocks.user.update).toHaveBeenCalledWith(user.id, {
-          profileImagePath: expectedRelativeKey,
+          profileImagePath: `s3://default/${expectedRelativeKey}`,
           profileChangedAt: expect.any(Date),
         });
       });
@@ -1261,7 +1260,7 @@ describe(AuthService.name, () => {
 
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [`/data/profile/${user.id}/${fileId}.webp`] },
+          data: { files: [`file:///data/profile/${user.id}/${fileId}.webp`] },
         });
       });
 
@@ -2264,7 +2263,7 @@ describe(AuthService.name, () => {
     it('should queue file deletion for old profile path', async () => {
       const fileId = newUuid();
       const oauthId = 'oauth-id';
-      const user = factory.userAdmin({ oauthId, profileImagePath: '/old/profile.jpg' });
+      const user = factory.userAdmin({ oauthId, profileImagePath: 'file:///old/profile.jpg' });
       // Need profileImagePath to be empty for syncProfilePicture to be called
       const userNoProfile = { ...user, profileImagePath: '' };
 

@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Stats } from 'node:fs';
 import { vitest } from 'vitest';
 import type { ILibraryBulkIdsJob, ILibraryFileJob } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { JOBS_LIBRARY_PAGINATION_SIZE } from 'src/constants.js';
 import { SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { mapLibrary } from 'src/dtos/library.dto.js';
@@ -196,7 +197,7 @@ describe(LibraryService.name, () => {
       mocks.storage.walk.mockImplementation(mockWalk);
       mocks.storage.stat.mockResolvedValue({ isDirectory: () => true } as Stats);
       mocks.storage.checkFileExists.mockResolvedValue(true);
-      mocks.asset.filterNewExternalAssetPaths.mockResolvedValue(['/data/user1/photo.jpg']);
+      mocks.asset.filterNewExternalAssetPaths.mockResolvedValue(['file:///data/user1/photo.jpg']);
 
       await sut.handleQueueSyncFiles({ id: library.id });
 
@@ -251,7 +252,7 @@ describe(LibraryService.name, () => {
       mocks.storage.walk.mockImplementation(mockWalk);
       mocks.storage.stat.mockResolvedValue({ isDirectory: () => true } as Stats);
       mocks.storage.checkFileExists.mockResolvedValue(true);
-      mocks.asset.filterNewExternalAssetPaths.mockResolvedValue(['/data/user1/photo.jpg']);
+      mocks.asset.filterNewExternalAssetPaths.mockResolvedValue(['file:///data/user1/photo.jpg']);
 
       await sut.handleQueueSyncFiles({ id: library.id });
 
@@ -462,7 +463,11 @@ describe(LibraryService.name, () => {
     });
 
     it('should un-trash an asset previously marked as offline', async () => {
-      const asset = AssetFactory.create({ originalPath: '/original/path.jpg', isOffline: true, deletedAt: newDate() });
+      const asset = AssetFactory.create({
+        originalPath: 'file:///original/path.jpg',
+        isOffline: true,
+        deletedAt: newDate(),
+      });
       const mockAssetJob: ILibraryBulkIdsJob = {
         assetIds: [asset.id],
         libraryId: newUuid(),
@@ -484,7 +489,11 @@ describe(LibraryService.name, () => {
     });
 
     it('should do nothing with offline asset if covered by exclusion pattern', async () => {
-      const asset = AssetFactory.create({ originalPath: '/original/path.jpg', isOffline: true, deletedAt: newDate() });
+      const asset = AssetFactory.create({
+        originalPath: 'file:///original/path.jpg',
+        isOffline: true,
+        deletedAt: newDate(),
+      });
       const mockAssetJob: ILibraryBulkIdsJob = {
         assetIds: [asset.id],
         libraryId: newUuid(),
@@ -505,7 +514,11 @@ describe(LibraryService.name, () => {
     });
 
     it('should do nothing with offline asset if not in import path', async () => {
-      const asset = AssetFactory.create({ originalPath: '/original/path.jpg', isOffline: true, deletedAt: newDate() });
+      const asset = AssetFactory.create({
+        originalPath: 'file:///original/path.jpg',
+        isOffline: true,
+        deletedAt: newDate(),
+      });
       const mockAssetJob: ILibraryBulkIdsJob = {
         assetIds: [asset.id],
         libraryId: newUuid(),
@@ -626,7 +639,7 @@ describe(LibraryService.name, () => {
         expect.objectContaining({
           ownerId: library.ownerId,
           libraryId: library.id,
-          originalPath: '/data/user1/photo.jpg',
+          originalPath: 'file:///data/user1/photo.jpg',
           type: AssetType.Image,
           originalFileName: 'photo.jpg',
           isExternal: true,
@@ -1436,9 +1449,9 @@ describe(LibraryService.name, () => {
 
       mocks.asset.getByLibraryIdAndOriginalPath.mockResolvedValue(asset);
 
-      await expect(sut.handleAssetRemoval({ libraryId: library.id, paths: [asset.originalPath] })).resolves.toBe(
-        JobStatus.Success,
-      );
+      await expect(
+        sut.handleAssetRemoval({ libraryId: library.id, paths: [diskPathOf(asset.originalPath)!] }),
+      ).resolves.toBe(JobStatus.Success);
 
       expect(mocks.asset.getByLibraryIdAndOriginalPath).toHaveBeenCalledWith(library.id, asset.originalPath);
       expect(mocks.asset.remove).toHaveBeenCalledWith(asset);
@@ -1453,7 +1466,7 @@ describe(LibraryService.name, () => {
         JobStatus.Success,
       );
 
-      expect(mocks.asset.getByLibraryIdAndOriginalPath).toHaveBeenCalledWith(library.id, '/data/missing.jpg');
+      expect(mocks.asset.getByLibraryIdAndOriginalPath).toHaveBeenCalledWith(library.id, 'file:///data/missing.jpg');
       expect(mocks.asset.remove).not.toHaveBeenCalled();
     });
 

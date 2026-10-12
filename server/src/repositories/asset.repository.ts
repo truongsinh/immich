@@ -19,6 +19,7 @@ import { jsonArrayFrom } from 'kysely/helpers/postgres';
 import { isEmpty, isUndefined, omitBy } from 'lodash-es';
 import { InjectKysely } from 'nestjs-kysely';
 import type { AuthDto } from 'src/dtos/auth.dto.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { type LockableProperty, Stack, lockableProperties } from 'src/database.js';
 import { Chunked, ChunkedArray, DummyValue, GenerateSql } from 'src/decorators.js';
 import {
@@ -1412,7 +1413,12 @@ export class AssetRepository {
 
   @GenerateSql()
   getFileSamples() {
-    return this.db.selectFrom('asset_file').select(['assetId', 'path']).limit(sql.lit(3)).execute();
+    return this.db
+      .selectFrom('asset_file')
+      .select(['assetId', 'path'])
+      .where('path', 'like', 'file://%')
+      .limit(sql.lit(3))
+      .execute();
   }
 
   // #763 slice 7: `authUserId` is the ACTING user (not necessarily the asset's owner) — the
@@ -2131,7 +2137,7 @@ export class AssetRepository {
     importPaths: string[],
     exclusionPatterns: string[],
   ): Promise<UpdateResult> {
-    const paths = importPaths.map((importPath) => `${importPath}%`);
+    const paths = importPaths.map((importPath) => `${toStorageUri(DISK, importPath)}%`);
     const exclusions = exclusionPatterns.map((pattern) => globToPostgresRegex(pattern));
 
     return this.db
@@ -2146,7 +2152,11 @@ export class AssetRepository {
       .where((eb) =>
         eb.or([
           eb.not(eb.or(paths.map((path) => eb('originalPath', 'like', path)))),
-          eb.or(exclusions.map((pattern) => eb('originalPath', '~*', pattern))),
+          eb.or(
+            exclusions.map((pattern) =>
+              eb(eb.fn('regexp_replace', ['originalPath', sql.lit('^file://'), sql.lit('')]), '~*', pattern),
+            ),
+          ),
         ]),
       )
       .executeTakeFirstOrThrow();

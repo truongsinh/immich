@@ -97,6 +97,8 @@ export const envData: EnvData = {
       presignedUrlExpiry: 3600,
       serveMode: 'redirect',
     },
+    aliases: {},
+    writeTargets: { originals: { type: 'disk' }, derivatives: { type: 'disk' } },
   },
 
   telemetry: {

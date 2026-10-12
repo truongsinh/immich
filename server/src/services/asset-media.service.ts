@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, InternalServerErrorException, NotFound
 import { createReadStream } from 'node:fs';
 import sanitize from 'sanitize-filename';
 import type { UploadFile, UploadRequest } from 'src/types.js';
-import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { Asset, AuthSharedLink } from 'src/database.js';
 import {
@@ -23,6 +23,7 @@ import { AssetDownloadOriginalDto } from 'src/dtos/asset.dto.js';
 import { AuthDto } from 'src/dtos/auth.dto.js';
 import {
   AssetFileType,
+  AssetPathType,
   AssetVisibility,
   CacheControl,
   ChecksumAlgorithm,
@@ -134,7 +135,7 @@ export class AssetMediaService extends BaseService {
     const uploadFolder = this.getUploadFolder(asUploadRequest(request, file));
     const uploadPath = `${uploadFolder}/${uploadFilename}`;
 
-    await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [uploadPath] } });
+    await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [toStorageUri(DISK, uploadPath)] } });
   }
 
   async uploadAsset(
@@ -327,7 +328,9 @@ export class AssetMediaService extends BaseService {
     if (!shouldSkipUploadFileCleanup(error)) {
       await this.jobRepository.queue({
         name: JobName.FileDelete,
-        data: { files: [file.originalPath, sidecarFile?.originalPath] },
+        data: {
+          files: [file.originalPath, sidecarFile?.originalPath].map((path) => path && toStorageUri(DISK, path)),
+        },
       });
     }
 
@@ -363,7 +366,7 @@ export class AssetMediaService extends BaseService {
 
       checksum: file.checksum,
       checksumAlgorithm: ChecksumAlgorithm.sha1File,
-      originalPath: file.originalPath,
+      originalPath: toStorageUri(DISK, file.originalPath),
 
       fileCreatedAt: dto.fileCreatedAt,
       fileModifiedAt: dto.fileModifiedAt,
@@ -399,7 +402,7 @@ export class AssetMediaService extends BaseService {
       if (sidecarFile) {
         await this.assetRepository.upsertFile({
           assetId: asset.id,
-          path: sidecarFile.originalPath,
+          path: toStorageUri(DISK, sidecarFile.originalPath),
           type: AssetFileType.Sidecar,
         });
         await this.storageRepository.utimes(sidecarFile.originalPath, new Date(), new Date(dto.fileModifiedAt));
@@ -410,22 +413,24 @@ export class AssetMediaService extends BaseService {
         lockedPropertiesBehavior: 'override',
       });
 
-      // If S3 backend, upload the file and update the path
-      writeBackend = StorageService.getWriteBackend();
-      if (!(writeBackend instanceof DiskStorageBackend)) {
-        const relativeKey = StorageCore.getRelativeNestedPath(
+      const target = StorageService.getWriteTarget(AssetPathType.Original);
+      if (target.type === 's3') {
+        const key = StorageCore.getRelativeNestedPath(
           StorageFolder.Upload,
           ownerId,
           `${asset.id}${getFilenameExtension(file.originalPath)}`,
         );
-        const stream = createReadStream(file.originalPath);
-        await writeBackend.put(relativeKey, stream, {
+        const originalPath = toStorageUri(target, key);
+        writeBackend = StorageService.resolve(originalPath).backend;
+        await writeBackend.put(key, createReadStream(file.originalPath), {
           contentType: mimeTypes.lookup(file.originalPath),
         });
-        backendFiles.push(relativeKey);
-        await this.assetRepository.update({ id: asset.id, originalPath: relativeKey });
-        // Clean up the temp local file
-        await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [file.originalPath] } });
+        backendFiles.push(key);
+        await this.assetRepository.update({ id: asset.id, originalPath });
+        await this.jobRepository.queue({
+          name: JobName.FileDelete,
+          data: { files: [toStorageUri(DISK, file.originalPath)] },
+        });
 
         if (sidecarFile) {
           const sidecarKey = StorageCore.getRelativeNestedPath(StorageFolder.Upload, ownerId, `${asset.id}.xmp`);
@@ -433,12 +438,12 @@ export class AssetMediaService extends BaseService {
           backendFiles.push(sidecarKey);
           await this.assetRepository.upsertFile({
             assetId: asset.id,
-            path: sidecarKey,
+            path: toStorageUri(target, sidecarKey),
             type: AssetFileType.Sidecar,
           });
           await this.jobRepository.queue({
             name: JobName.FileDelete,
-            data: { files: [sidecarFile.originalPath] },
+            data: { files: [toStorageUri(DISK, sidecarFile.originalPath)] },
           });
         }
       }

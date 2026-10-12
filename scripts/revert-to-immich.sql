@@ -427,6 +427,15 @@ DELETE FROM "migration_overrides" WHERE "name" = 'index_idx_asset_exif_descripti
 -- asset."localDateTime" for the filter panel's taken range.
 DROP INDEX IF EXISTS "asset_localDateTime_range_idx";
 
+-- 1798000000000-StoredPathsCarryStorageScheme prefixed every stored path with its storage:
+-- `file://` for disk, `s3://<alias>/` for S3. Upstream reads bare absolute paths, so strip the disk
+-- scheme. Files on an S3 alias have no upstream equivalent and are left as they are.
+UPDATE "asset" SET "originalPath" = substr("originalPath", 8) WHERE "originalPath" LIKE 'file://%';
+UPDATE "asset_file" SET "path" = substr("path", 8) WHERE "path" LIKE 'file://%';
+UPDATE "person" SET "thumbnailPath" = substr("thumbnailPath", 8) WHERE "thumbnailPath" LIKE 'file://%';
+UPDATE "user" SET "profileImagePath" = substr("profileImagePath", 8) WHERE "profileImagePath" LIKE 'file://%';
+UPDATE "integrity_report" SET "path" = substr("path", 8) WHERE "path" LIKE 'file://%';
+
 -- 1783628194057-DisablePostgresJit set jit=off on the application role. Restore
 -- the PostgreSQL default so the reverted database carries no Gallery-specific
 -- planner tuning.
@@ -565,6 +574,7 @@ DELETE FROM "kysely_migrations"
   '1794100000000-DropAssetIsFavoriteColumn',
   '1796000000000-AddAssetFaceCreatedBy',
   '1797000000000-AddAssetLocalDateTimeIndex',
+  '1798000000000-StoredPathsCarryStorageScheme',
   -- Build-time compatibility alias (server/bin/sync-gallery-migrations.mjs): this migration was
   -- renumbered off 1793000000000 when fork PR #1060 took that timestamp, but rolling RC instances
   -- had already recorded the pre-rename name. Drop that row too, or upstream's migrator aborts

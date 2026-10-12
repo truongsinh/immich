@@ -6963,7 +6963,7 @@ describe(SharedSpaceService.name, () => {
       mocks.sharedSpace.getPersonById.mockResolvedValue(person);
       mocks.sharedSpace.getPersonalThumbnailForSpacePerson.mockResolvedValue({
         personId: newUuid(),
-        thumbnailPath: '/path/to/global-person-thumbnail.jpeg',
+        thumbnailPath: 'file:///path/to/global-person-thumbnail.jpeg',
       });
 
       await expect(sut.getSpacePersonThumbnail(auth, spaceId, personId)).resolves.toEqual(

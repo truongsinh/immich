@@ -673,6 +673,8 @@ select
   "path"
 from
   "asset_file"
+where
+  "path" like $1
 limit
   3
 
@@ -1337,7 +1339,7 @@ where
   and "libraryId" = $5::uuid
   and (
     not "originalPath" like $6
-    or "originalPath" ~* $7
+    or regexp_replace("originalPath", '^file://', '') ~* $7
   )
 
 -- AssetRepository.filterNewExternalAssetPaths

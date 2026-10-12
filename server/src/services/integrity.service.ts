@@ -13,6 +13,7 @@ import type {
   IIntegrityPathWithReportJob,
   IIntegrityUntrackedFilesJob,
 } from 'src/types.js';
+import { DISK, diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { JOBS_LIBRARY_PAGINATION_SIZE } from 'src/constants.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
@@ -62,6 +63,15 @@ import { batched, handlePromiseError } from 'src/utils/misc.js';
  *   * Can perform download or trash (asset)
  */
 
+// integrity checks only run while no S3 alias is configured, so every path they handle is on disk
+const requireDiskPath = (path: string): string => {
+  const diskPath = diskPathOf(path);
+  if (!diskPath) {
+    throw new Error(`Integrity checks cannot read ${path}: it is not on disk`);
+  }
+  return diskPath;
+};
+
 @Injectable()
 export class IntegrityService extends BaseService {
   private integrityLock = false;
@@ -74,7 +84,7 @@ export class IntegrityService extends BaseService {
    * disk+S3 setups mid-migration. Tracked in https://github.com/open-noodle/gallery/issues/685.
    */
   private skipIfS3Configured(): boolean {
-    if (StorageService.getS3Backend()) {
+    if (StorageService.getAliasBackends().size > 0) {
       this.logger.warn(
         'Skipping integrity check job: an S3 storage backend is configured and integrity checks are not yet S3-aware (open-noodle/gallery#685).',
       );
@@ -180,7 +190,8 @@ export class IntegrityService extends BaseService {
   }
 
   async getIntegrityReportFile(id: string): Promise<ImmichFileResponse> {
-    const { path } = await this.integrityRepository.getById(id);
+    const { path: storedPath } = await this.integrityRepository.getById(id);
+    const path = requireDiskPath(storedPath);
 
     return new ImmichFileResponse({
       path,
@@ -210,7 +221,7 @@ export class IntegrityService extends BaseService {
     } else {
       const trackedPaths = await this.integrityRepository.getTrackedPaths([path]);
       if (trackedPaths.length === 0) {
-        await this.storageRepository.unlink(path);
+        await this.storageRepository.unlink(requireDiskPath(path));
       }
       await this.integrityRepository.deleteById(id);
     }
@@ -266,11 +277,11 @@ export class IntegrityService extends BaseService {
 
     async function* paths() {
       for await (const batch of assetPaths) {
-        yield ['asset', batch] as const;
+        yield ['asset', batch.map((path) => toStorageUri(DISK, path))] as const;
       }
 
       for await (const batch of assetFilePaths) {
-        yield ['asset_file', batch] as const;
+        yield ['asset_file', batch.map((path) => toStorageUri(DISK, path))] as const;
       }
     }
 
@@ -360,7 +371,7 @@ export class IntegrityService extends BaseService {
         }
 
         try {
-          await this.storageRepository.stat(path);
+          await this.storageRepository.stat(requireDiskPath(path));
           return;
         } catch {
           return reportId;
@@ -441,7 +452,7 @@ export class IntegrityService extends BaseService {
     const results = await Promise.all(
       items.map(async (item) => {
         try {
-          await this.storageRepository.stat(item.path);
+          await this.storageRepository.stat(requireDiskPath(item.path));
           return { ...item, exists: true };
         } catch {
           return { ...item, exists: false };
@@ -484,7 +495,7 @@ export class IntegrityService extends BaseService {
     const results = await Promise.all(
       paths.map(async ({ reportId, path }) => {
         try {
-          await this.storageRepository.stat(path);
+          await this.storageRepository.stat(requireDiskPath(path));
           return reportId;
         } catch {
           return;
@@ -537,7 +548,7 @@ export class IntegrityService extends BaseService {
 
     try {
       await pipeline([
-        this.storageRepository.createPlainReadStream(originalPath),
+        this.storageRepository.createPlainReadStream(requireDiskPath(originalPath)),
         new Writable({
           write(chunk, _encoding, callback) {
             hash.update(chunk);
@@ -666,7 +677,7 @@ export class IntegrityService extends BaseService {
 
         try {
           await pipeline([
-            this.storageRepository.createPlainReadStream(path),
+            this.storageRepository.createPlainReadStream(requireDiskPath(path)),
             new Writable({
               write(chunk, _encoding, callback) {
                 hash.update(chunk);
@@ -768,7 +779,7 @@ export class IntegrityService extends BaseService {
       await Promise.all(
         byPath
           .filter(({ path }) => !trackedPaths.has(path))
-          .map(({ path }) => this.storageRepository.unlink(path).catch(() => void 0)),
+          .map(({ path }) => this.storageRepository.unlink(requireDiskPath(path)).catch(() => void 0)),
       );
       await this.integrityRepository.deleteByIds(byPath.map(({ id }) => id));
     }

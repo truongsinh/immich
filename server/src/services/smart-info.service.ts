@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { JobOf, VideoInfo } from 'src/types.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import { MachineLearningConfig, SystemConfig } from 'src/dtos/config.dto.js';
 import { AssetType, AssetVisibility, DatabaseLock, ImmichWorker, JobName, JobStatus, QueueName } from 'src/enum.js';
@@ -169,7 +170,7 @@ export class SmartInfoService extends BaseService {
         try {
           embeddings = [];
           for (const framePath of framePaths) {
-            const raw = await this.machineLearningRepository.encodeImage(framePath, clipConfig);
+            const raw = await this.machineLearningRepository.encodeImage(toStorageUri(DISK, framePath), clipConfig);
             embeddings.push(JSON.parse(raw));
           }
         } catch (error) {

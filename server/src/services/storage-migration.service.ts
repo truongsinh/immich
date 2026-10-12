@@ -1,10 +1,16 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import type { JobOf } from 'src/types.js';
+import {
+  StorageTarget,
+  parseStorageTarget,
+  storageTargetUri,
+  toStorageUri,
+} from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnJob } from 'src/decorators.js';
 import { AssetFileType, JobName, JobStatus, QueueName } from 'src/enum.js';
-import { StorageMigrationDirection } from 'src/repositories/storage-migration.repository.js';
 import { BaseService } from 'src/services/base.service.js';
 import { StorageService } from 'src/services/storage.service.js';
 
@@ -21,35 +27,38 @@ interface StorageMigrationFileTypes {
 
 @Injectable()
 export class StorageMigrationService extends BaseService {
-  private validateBackendConfig(direction: StorageMigrationDirection): void {
-    const backend = this.configRepository.getEnv().storage.backend;
-    if (direction === 'toS3' && backend !== 's3') {
-      throw new BadRequestException('Storage backend must be set to "s3" (IMMICH_STORAGE_BACKEND=s3) to migrate to S3');
+  /** The configured storage a migration moves files to, from `file://` or `s3://<alias>`. */
+  private getTarget(uri: string): StorageTarget {
+    let target: StorageTarget;
+    try {
+      target = parseStorageTarget(uri);
+    } catch (error: any) {
+      throw new BadRequestException(error.message);
     }
-    if (direction === 'toDisk' && backend !== 'disk') {
-      throw new BadRequestException(
-        'Storage backend must be set to "disk" (IMMICH_STORAGE_BACKEND=disk) to migrate to disk',
-      );
+
+    if (target.type === 's3' && !StorageService.getAliasBackends().has(target.alias)) {
+      throw new BadRequestException(`Storage alias "${target.alias}" is not configured`);
     }
+    return target;
   }
 
-  private async validateS3Connection(): Promise<void> {
-    const s3Backend = StorageService.getS3Backend();
-    if (!s3Backend) {
-      throw new BadRequestException('S3 storage backend is not configured');
+  private async validateConnection(target: StorageTarget): Promise<void> {
+    if (target.type === 'disk') {
+      return;
     }
 
     try {
-      await s3Backend.exists('__immich_connection_test__');
+      await StorageService.getAliasBackends().get(target.alias)!.exists('__immich_connection_test__');
     } catch (error: any) {
-      throw new BadRequestException(`S3 connection test failed: ${error.message}`);
+      throw new BadRequestException(`S3 connection test failed for ${storageTargetUri(target)}: ${error.message}`);
     }
   }
 
-  async getEstimate(direction: StorageMigrationDirection) {
+  async getEstimate(targetUri: string) {
+    const target = this.getTarget(targetUri);
     const [fileCounts, estimatedSizeBytes] = await Promise.all([
-      this.storageMigrationRepository.getFileCounts(direction),
-      this.storageMigrationRepository.getOriginalsSizeEstimate(direction),
+      this.storageMigrationRepository.getFileCounts(target),
+      this.storageMigrationRepository.getOriginalsSizeEstimate(target),
     ]);
 
     const total =
@@ -63,22 +72,22 @@ export class StorageMigrationService extends BaseService {
       fileCounts.profileImages;
 
     return {
-      direction,
+      target: storageTargetUri(target),
       fileCounts: { ...fileCounts, total },
       estimatedSizeBytes,
     };
   }
 
   async start(options: {
-    direction: StorageMigrationDirection;
+    target: string;
     deleteSource: boolean;
     fileTypes: StorageMigrationFileTypes;
     concurrency: number;
   }) {
-    this.validateBackendConfig(options.direction);
-    await this.validateS3Connection();
+    const target = this.getTarget(options.target);
+    await this.validateConnection(target);
 
-    const fileCounts = await this.storageMigrationRepository.getFileCounts(options.direction);
+    const fileCounts = await this.storageMigrationRepository.getFileCounts(target);
     const total =
       fileCounts.originals +
       fileCounts.thumbnails +
@@ -101,7 +110,7 @@ export class StorageMigrationService extends BaseService {
 
     await this.jobRepository.queue({
       name: JobName.StorageBackendMigrationQueueAll,
-      data: { ...options, batchId },
+      data: { ...options, target: storageTargetUri(target), batchId },
     });
 
     return { batchId };
@@ -118,9 +127,9 @@ export class StorageMigrationService extends BaseService {
 
   @OnJob({ name: JobName.StorageBackendMigrationQueueAll, queue: QueueName.StorageBackendMigration })
   async handleQueueAll(job: JobOf<JobName.StorageBackendMigrationQueueAll>): Promise<JobStatus> {
-    const { direction, deleteSource, fileTypes, concurrency, batchId } = job;
+    const { deleteSource, fileTypes, concurrency, batchId } = job;
 
-    this.validateBackendConfig(direction);
+    const target = this.getTarget(job.target);
     this.jobRepository.setConcurrency(QueueName.StorageBackendMigration, concurrency);
 
     let totalQueued = 0;
@@ -148,14 +157,14 @@ export class StorageMigrationService extends BaseService {
 
     // Stream originals
     if (fileTypes.originals) {
-      for await (const row of this.storageMigrationRepository.streamOriginals(direction)) {
+      for await (const row of this.storageMigrationRepository.streamOriginals(target)) {
         await enqueue({
           entityType: 'asset',
           entityId: row.id,
           fileType: 'original',
           sourcePath: row.originalPath,
           batchId,
-          direction,
+          target: job.target,
           deleteSource,
         });
       }
@@ -177,14 +186,14 @@ export class StorageMigrationService extends BaseService {
     }
 
     if (assetFileTypes.length > 0) {
-      for await (const row of this.storageMigrationRepository.streamAssetFiles(direction, assetFileTypes)) {
+      for await (const row of this.storageMigrationRepository.streamAssetFiles(target, assetFileTypes)) {
         await enqueue({
           entityType: 'assetFile',
           entityId: row.id,
           fileType: row.type,
           sourcePath: row.path,
           batchId,
-          direction,
+          target: job.target,
           deleteSource,
         });
       }
@@ -192,14 +201,14 @@ export class StorageMigrationService extends BaseService {
 
     // Stream encoded videos
     if (fileTypes.encodedVideos) {
-      for await (const row of this.storageMigrationRepository.streamEncodedVideos(direction)) {
+      for await (const row of this.storageMigrationRepository.streamEncodedVideos(target)) {
         await enqueue({
           entityType: 'asset',
           entityId: row.assetId,
           fileType: 'encodedVideo',
           sourcePath: row.path,
           batchId,
-          direction,
+          target: job.target,
           deleteSource,
         });
       }
@@ -207,14 +216,14 @@ export class StorageMigrationService extends BaseService {
 
     // Stream person thumbnails
     if (fileTypes.personThumbnails) {
-      for await (const row of this.storageMigrationRepository.streamPersonThumbnails(direction)) {
+      for await (const row of this.storageMigrationRepository.streamPersonThumbnails(target)) {
         await enqueue({
           entityType: 'person',
           entityId: row.personGroupId,
           fileType: null,
           sourcePath: row.thumbnailPath,
           batchId,
-          direction,
+          target: job.target,
           deleteSource,
         });
       }
@@ -222,14 +231,14 @@ export class StorageMigrationService extends BaseService {
 
     // Stream profile images
     if (fileTypes.profileImages) {
-      for await (const row of this.storageMigrationRepository.streamProfileImages(direction)) {
+      for await (const row of this.storageMigrationRepository.streamProfileImages(target)) {
         await enqueue({
           entityType: 'user',
           entityId: row.id,
           fileType: null,
           sourcePath: row.profileImagePath,
           batchId,
-          direction,
+          target: job.target,
           deleteSource,
         });
       }
@@ -244,26 +253,27 @@ export class StorageMigrationService extends BaseService {
 
   @OnJob({ name: JobName.StorageBackendMigrationSingle, queue: QueueName.StorageBackendMigration })
   async handleMigration(job: JobOf<JobName.StorageBackendMigrationSingle>): Promise<JobStatus> {
-    const { entityType, entityId, fileType, sourcePath, batchId, direction, deleteSource } = job;
+    const { entityType, entityId, fileType, sourcePath, batchId, deleteSource } = job;
 
     try {
-      const sourceBackend = this.resolveSourceBackend(direction);
-      const targetBackend = this.resolveTargetBackend(direction);
-      const targetPath = this.computeTargetPath(sourcePath, direction);
+      const target = this.getTarget(job.target);
+      const source = StorageService.resolve(sourcePath);
+      const targetPath = toStorageUri(target, this.getTargetKey(source.target, source.key, target));
+      const destination = StorageService.resolve(targetPath);
 
       // Check source exists
-      const sourceExists = await sourceBackend.exists(sourcePath);
+      const sourceExists = await source.backend.exists(source.key);
       if (!sourceExists) {
         this.logger.warn(`Source file not found, skipping: ${sourcePath}`);
         return JobStatus.Skipped;
       }
 
       // Idempotency: check if target already exists
-      const targetExists = await targetBackend.exists(targetPath);
+      const targetExists = await destination.backend.exists(destination.key);
       if (!targetExists) {
         // Copy: get stream from source, put to target
-        const { stream } = await sourceBackend.get(sourcePath);
-        await targetBackend.put(targetPath, stream);
+        const { stream } = await source.backend.get(source.key);
+        await destination.backend.put(destination.key, stream);
       }
 
       // Update DB path with optimistic concurrency
@@ -282,14 +292,14 @@ export class StorageMigrationService extends BaseService {
         fileType,
         oldPath: sourcePath,
         newPath: targetPath,
-        direction,
+        target: job.target,
         batchId,
       });
 
       // Optionally delete source
       if (deleteSource) {
         try {
-          await sourceBackend.delete(sourcePath);
+          await source.backend.delete(source.key);
         } catch (error: any) {
           this.logger.warn(`Failed to delete source file after migration: ${sourcePath}: ${error.message}`);
         }
@@ -339,46 +349,22 @@ export class StorageMigrationService extends BaseService {
     return { rolledBack, failed, total };
   }
 
-  private resolveSourceBackend(direction: StorageMigrationDirection) {
-    if (direction === 'toS3') {
-      return StorageService.getDiskBackend();
-    }
-    const s3Backend = StorageService.getS3Backend();
-    if (!s3Backend) {
-      throw new BadRequestException('S3 storage backend is not configured');
-    }
-    return s3Backend;
-  }
-
-  private resolveTargetBackend(direction: StorageMigrationDirection) {
-    if (direction === 'toS3') {
-      const s3Backend = StorageService.getS3Backend();
-      if (!s3Backend) {
-        throw new BadRequestException('S3 storage backend is not configured');
-      }
-      return s3Backend;
-    }
-    return StorageService.getDiskBackend();
-  }
-
-  private computeTargetPath(sourcePath: string, direction: StorageMigrationDirection): string {
-    if (direction === 'toS3') {
-      // Strip media location prefix to get relative key
-      // e.g. /usr/src/app/upload/library/user/file.jpg -> library/user/file.jpg
-      const mediaLocation = StorageCore.getMediaLocation();
-      const prefix = mediaLocation.endsWith('/') ? mediaLocation : `${mediaLocation}/`;
-      if (sourcePath.startsWith(prefix)) {
-        return sourcePath.slice(prefix.length);
-      }
-      // If path doesn't start with media location, strip leading slash as fallback
-      return sourcePath.startsWith('/') ? sourcePath.slice(1) : sourcePath;
-    }
-
-    // toDisk: prepend media location
-    // e.g. library/user/file.jpg -> /usr/src/app/upload/library/user/file.jpg
+  /**
+   * An S3 key mirrors the file's place under the media location, so a file keeps its key when it
+   * moves between aliases and returns to the same disk path it came from.
+   */
+  private getTargetKey(source: StorageTarget, key: string, target: StorageTarget): string {
     const mediaLocation = StorageCore.getMediaLocation();
+    if (target.type === 'disk') {
+      return source.type === 'disk' ? key : join(mediaLocation, key);
+    }
+    if (source.type === 's3') {
+      return key;
+    }
+
     const prefix = mediaLocation.endsWith('/') ? mediaLocation : `${mediaLocation}/`;
-    return `${prefix}${sourcePath}`;
+    // a disk file outside the media location (an external library) keeps its absolute layout
+    return key.startsWith(prefix) ? key.slice(prefix.length) : key.slice(1);
   }
 
   private async updatePath(

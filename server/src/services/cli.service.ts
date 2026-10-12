@@ -1,6 +1,7 @@
 import { schemaDiff } from '@immich/sql-tools';
 import { Injectable } from '@nestjs/common';
 import { isAbsolute, join } from 'node:path';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { SALT_ROUNDS } from 'src/constants.js';
 import { MaintenanceAuthDto } from 'src/dtos/maintenance.dto.js';
 import { UserAdminResponseDto, mapUserAdmin } from 'src/dtos/user.dto.js';
@@ -201,7 +202,8 @@ export class CliService extends BaseService {
       paths.push(asset.path);
     }
 
-    return paths.filter(Boolean) as string[];
+    // the media location only applies to files on disk
+    return paths.filter(Boolean).flatMap((path) => diskPathOf(path) ?? []);
   }
 
   async migrateFilePaths({

@@ -10,7 +10,6 @@ import { LoggingRepository } from 'src/repositories/logging.repository.js';
 import { StorageRepository } from 'src/repositories/storage.repository.js';
 import { StorageMigrationService } from 'src/services/storage-migration.service.js';
 import { StorageService } from 'src/services/storage.service.js';
-import { mockEnvData } from 'test/repositories/config.repository.mock.js';
 import { ServiceMocks, automock, makeStream, newTestService } from 'test/utils.js';
 
 describe(StorageMigrationService.name, () => {
@@ -34,6 +33,8 @@ describe(StorageMigrationService.name, () => {
     getServeStrategy: ReturnType<typeof vi.fn>;
     downloadToTemp: ReturnType<typeof vi.fn>;
   };
+
+  let mockArchiveBackend: typeof mockS3Backend;
 
   beforeEach(() => {
     ({ sut, mocks } = newTestService(StorageMigrationService));
@@ -59,8 +60,20 @@ describe(StorageMigrationService.name, () => {
     vi.spyOn(StorageService, 'getDiskBackend').mockReturnValue(
       mockDiskBackend as unknown as ReturnType<typeof StorageService.getDiskBackend>,
     );
-    vi.spyOn(StorageService, 'getS3Backend').mockReturnValue(
-      mockS3Backend as unknown as ReturnType<typeof StorageService.getS3Backend>,
+    mockArchiveBackend = {
+      exists: vi.fn(),
+      get: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+      getServeStrategy: vi.fn(),
+      downloadToTemp: vi.fn(),
+    };
+
+    vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(
+      new Map([
+        ['default', mockS3Backend],
+        ['archive', mockArchiveBackend],
+      ]) as unknown as ReturnType<typeof StorageService.getAliasBackends>,
     );
     vi.spyOn(StorageCore, 'getMediaLocation').mockReturnValue('/usr/src/app/upload');
   });
@@ -88,24 +101,24 @@ describe(StorageMigrationService.name, () => {
       mocks.storageMigration.getFileCounts.mockResolvedValue(fileCounts);
       mocks.storageMigration.getOriginalsSizeEstimate.mockResolvedValue(1_000_000);
 
-      const result = await sut.getEstimate('toS3');
+      const result = await sut.getEstimate('s3://default');
 
       expect(result).toEqual({
-        direction: 'toS3',
+        target: 's3://default',
         fileCounts: {
           ...fileCounts,
           total: 565,
         },
         estimatedSizeBytes: 1_000_000,
       });
-      expect(mocks.storageMigration.getFileCounts).toHaveBeenCalledWith('toS3');
-      expect(mocks.storageMigration.getOriginalsSizeEstimate).toHaveBeenCalledWith('toS3');
+      expect(mocks.storageMigration.getFileCounts).toHaveBeenCalledWith({ type: 's3', alias: 'default' });
+      expect(mocks.storageMigration.getOriginalsSizeEstimate).toHaveBeenCalledWith({ type: 's3', alias: 'default' });
     });
   });
 
   describe('start', () => {
     const defaultOptions = {
-      direction: 'toS3' as const,
+      target: 's3://default',
       deleteSource: false,
       fileTypes: {
         originals: true,
@@ -131,8 +144,7 @@ describe(StorageMigrationService.name, () => {
       profileImages: 0,
     };
 
-    it('should validate backend config, check no active migration, queue orchestrator, and return batchId', async () => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 's3' } }));
+    it('should validate the target, check no active migration, queue orchestrator, and return batchId', async () => {
       mocks.job.isActive.mockResolvedValue(false);
       mockS3Backend.exists.mockResolvedValue(true);
       mocks.storageMigration.getFileCounts.mockResolvedValue(nonZeroFileCounts);
@@ -146,7 +158,7 @@ describe(StorageMigrationService.name, () => {
         expect.objectContaining({
           name: JobName.StorageBackendMigrationQueueAll,
           data: expect.objectContaining({
-            direction: 'toS3',
+            target: 's3://default',
             deleteSource: false,
             batchId: result.batchId,
           }),
@@ -154,24 +166,12 @@ describe(StorageMigrationService.name, () => {
       );
     });
 
-    it('should throw if backend config does not match direction (toS3 but backend=disk)', async () => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 'disk' } }));
-
-      await expect(sut.start(defaultOptions)).rejects.toThrow(
-        'Storage backend must be set to "s3" (IMMICH_STORAGE_BACKEND=s3) to migrate to S3',
-      );
-    });
-
-    it('should throw if backend config does not match direction (toDisk but backend=s3)', async () => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 's3' } }));
-
-      await expect(sut.start({ ...defaultOptions, direction: 'toDisk' })).rejects.toThrow(
-        'Storage backend must be set to "disk" (IMMICH_STORAGE_BACKEND=disk) to migrate to disk',
-      );
+    it.each(['s3://nowhere', 'nowhere', 's3://default/key'])('refuses the target %s', async (target) => {
+      await expect(sut.start({ ...defaultOptions, target })).rejects.toThrow(/nowhere|Invalid storage target/);
+      expect(mocks.job.queue).not.toHaveBeenCalled();
     });
 
     it('should throw if migration already active', async () => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 's3' } }));
       mocks.job.isActive.mockResolvedValue(true);
       mockS3Backend.exists.mockResolvedValue(true);
       mocks.storageMigration.getFileCounts.mockResolvedValue(nonZeroFileCounts);
@@ -180,7 +180,6 @@ describe(StorageMigrationService.name, () => {
     });
 
     it('should throw if there are no files to migrate', async () => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 's3' } }));
       mockS3Backend.exists.mockResolvedValue(true);
       mocks.storageMigration.getFileCounts.mockResolvedValue({
         originals: 0,
@@ -200,7 +199,7 @@ describe(StorageMigrationService.name, () => {
 
   describe('handleQueueAll', () => {
     const baseJob = {
-      direction: 'toS3' as const,
+      target: 's3://default',
       deleteSource: false,
       batchId: 'batch-1',
       concurrency: 4,
@@ -217,20 +216,16 @@ describe(StorageMigrationService.name, () => {
       profileImages: true,
     };
 
-    beforeEach(() => {
-      mocks.config.getEnv.mockReturnValue(mockEnvData({ storage: { backend: 's3' } }));
-    });
-
     it('should stream files based on fileTypes flags and queue worker jobs', async () => {
       mocks.storageMigration.streamOriginals.mockReturnValue(
-        makeStream([{ id: 'asset-1', originalPath: '/usr/src/app/upload/library/user/ab/cd/file.jpg' }]),
+        makeStream([{ id: 'asset-1', originalPath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg' }]),
       );
       mocks.storageMigration.streamAssetFiles.mockReturnValue(
         makeStream([
           {
             id: 'file-1',
             assetId: 'asset-1',
-            path: '/usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
+            path: 'file:///usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
             type: AssetFileType.Thumbnail,
           },
         ]),
@@ -240,7 +235,7 @@ describe(StorageMigrationService.name, () => {
           {
             id: 'file-2',
             assetId: 'asset-2',
-            path: '/usr/src/app/upload/encoded-video/user/ab/cd/video.mp4',
+            path: 'file:///usr/src/app/upload/encoded-video/user/ab/cd/video.mp4',
             type: AssetFileType.EncodedVideo,
           },
         ]),
@@ -250,12 +245,12 @@ describe(StorageMigrationService.name, () => {
           {
             ownerId: 'owner-1',
             personGroupId: 'person-1',
-            thumbnailPath: '/usr/src/app/upload/thumbs/user/ab/cd/person.jpeg',
+            thumbnailPath: 'file:///usr/src/app/upload/thumbs/user/ab/cd/person.jpeg',
           },
         ]),
       );
       mocks.storageMigration.streamProfileImages.mockReturnValue(
-        makeStream([{ id: 'user-1', profileImagePath: '/usr/src/app/upload/profile/user/ab/cd/profile.jpg' }]),
+        makeStream([{ id: 'user-1', profileImagePath: 'file:///usr/src/app/upload/profile/user/ab/cd/profile.jpg' }]),
       );
 
       const result = await sut.handleQueueAll({ ...baseJob, fileTypes: allFileTypes });
@@ -273,7 +268,7 @@ describe(StorageMigrationService.name, () => {
             entityType: 'asset',
             entityId: 'asset-1',
             fileType: 'original',
-            sourcePath: '/usr/src/app/upload/library/user/ab/cd/file.jpg',
+            sourcePath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
           }),
         }),
       );
@@ -281,7 +276,7 @@ describe(StorageMigrationService.name, () => {
 
     it('should only queue enabled file types (thumbnails=false skips thumbnails)', async () => {
       mocks.storageMigration.streamOriginals.mockReturnValue(
-        makeStream([{ id: 'asset-1', originalPath: '/usr/src/app/upload/library/user/ab/cd/file.jpg' }]),
+        makeStream([{ id: 'asset-1', originalPath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg' }]),
       );
       mocks.storageMigration.streamAssetFiles.mockReturnValue(makeStream([]));
       mocks.storageMigration.streamEncodedVideos.mockReturnValue(makeStream([]));
@@ -302,7 +297,7 @@ describe(StorageMigrationService.name, () => {
       const result = await sut.handleQueueAll({ ...baseJob, fileTypes });
 
       expect(result).toBe(JobStatus.Success);
-      expect(mocks.storageMigration.streamOriginals).toHaveBeenCalledWith('toS3');
+      expect(mocks.storageMigration.streamOriginals).toHaveBeenCalledWith({ type: 's3', alias: 'default' });
       expect(mocks.storageMigration.streamAssetFiles).not.toHaveBeenCalled();
       expect(mocks.storageMigration.streamEncodedVideos).not.toHaveBeenCalled();
       expect(mocks.storageMigration.streamPersonThumbnails).not.toHaveBeenCalled();
@@ -330,7 +325,7 @@ describe(StorageMigrationService.name, () => {
       await sut.handleQueueAll({ ...baseJob, fileTypes });
 
       expect(mocks.storageMigration.streamOriginals).not.toHaveBeenCalled();
-      expect(mocks.storageMigration.streamAssetFiles).toHaveBeenCalledWith('toS3', [
+      expect(mocks.storageMigration.streamAssetFiles).toHaveBeenCalledWith({ type: 's3', alias: 'default' }, [
         AssetFileType.Thumbnail,
         AssetFileType.Preview,
       ]);
@@ -342,13 +337,14 @@ describe(StorageMigrationService.name, () => {
       entityType: 'asset' as const,
       entityId: 'asset-1',
       fileType: 'original' as string | null,
-      sourcePath: '/usr/src/app/upload/library/user/ab/cd/file.jpg',
+      sourcePath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
       batchId: 'batch-1',
-      direction: 'toS3' as const,
+      target: 's3://default',
       deleteSource: false,
     };
+    const sourceDiskPath = '/usr/src/app/upload/library/user/ab/cd/file.jpg';
 
-    it('should copy file from source to target, update DB path, write migration log, and return Success', async () => {
+    it('moves a file to the named target and stores its new URI', async () => {
       const mockStream = Readable.from([]);
       mockDiskBackend.exists.mockResolvedValue(true);
       mockS3Backend.exists.mockResolvedValue(false);
@@ -360,23 +356,22 @@ describe(StorageMigrationService.name, () => {
       const result = await sut.handleMigration(baseJob);
 
       expect(result).toBe(JobStatus.Success);
-      // For toS3: source is disk, target is S3
-      expect(mockDiskBackend.exists).toHaveBeenCalledWith(baseJob.sourcePath);
+      expect(mockDiskBackend.exists).toHaveBeenCalledWith(sourceDiskPath);
       expect(mockS3Backend.exists).toHaveBeenCalledWith('library/user/ab/cd/file.jpg');
-      expect(mockDiskBackend.get).toHaveBeenCalledWith(baseJob.sourcePath);
+      expect(mockDiskBackend.get).toHaveBeenCalledWith(sourceDiskPath);
       expect(mockS3Backend.put).toHaveBeenCalledWith('library/user/ab/cd/file.jpg', mockStream);
       expect(mocks.storageMigration.updateAssetOriginalPath).toHaveBeenCalledWith(
         'asset-1',
         baseJob.sourcePath,
-        'library/user/ab/cd/file.jpg',
+        's3://default/library/user/ab/cd/file.jpg',
       );
       expect(mocks.storageMigration.createLogEntry).toHaveBeenCalledWith({
         entityType: 'asset',
         entityId: 'asset-1',
         fileType: 'original',
         oldPath: baseJob.sourcePath,
-        newPath: 'library/user/ab/cd/file.jpg',
-        direction: 'toS3',
+        newPath: 's3://default/library/user/ab/cd/file.jpg',
+        target: 's3://default',
         batchId: 'batch-1',
       });
     });
@@ -411,7 +406,9 @@ describe(StorageMigrationService.name, () => {
         });
 
         try {
-          await expect(sut.handleMigration({ ...baseJob, sourcePath })).resolves.toBe(JobStatus.Failed);
+          await expect(sut.handleMigration({ ...baseJob, sourcePath: `file://${sourcePath}` })).resolves.toBe(
+            JobStatus.Failed,
+          );
           expect(mocks.storageMigration.updateAssetOriginalPath).not.toHaveBeenCalled();
         } finally {
           await rm(mediaLocation, { recursive: true, force: true });
@@ -464,7 +461,7 @@ describe(StorageMigrationService.name, () => {
       const result = await sut.handleMigration({ ...baseJob, deleteSource: true });
 
       expect(result).toBe(JobStatus.Success);
-      expect(mockDiskBackend.delete).toHaveBeenCalledWith(baseJob.sourcePath);
+      expect(mockDiskBackend.delete).toHaveBeenCalledWith(sourceDiskPath);
     });
 
     it('should not delete source when deleteSource is false', async () => {
@@ -492,14 +489,14 @@ describe(StorageMigrationService.name, () => {
       expect(result).toBe(JobStatus.Failed);
     });
 
-    it('should handle toDisk direction correctly (S3 source, disk target)', async () => {
+    it('should move a file from an S3 alias to disk', async () => {
       const toDiskJob = {
         entityType: 'asset' as const,
         entityId: 'asset-1',
         fileType: 'original' as string | null,
-        sourcePath: 'library/user/ab/cd/file.jpg',
+        sourcePath: 's3://default/library/user/ab/cd/file.jpg',
         batchId: 'batch-1',
-        direction: 'toDisk' as const,
+        target: 'file://',
         deleteSource: false,
       };
 
@@ -514,18 +511,50 @@ describe(StorageMigrationService.name, () => {
       const result = await sut.handleMigration(toDiskJob);
 
       expect(result).toBe(JobStatus.Success);
-      // For toDisk: source is S3, target is disk
       expect(mockS3Backend.exists).toHaveBeenCalledWith('library/user/ab/cd/file.jpg');
       expect(mockDiskBackend.exists).toHaveBeenCalledWith('/usr/src/app/upload/library/user/ab/cd/file.jpg');
       expect(mockS3Backend.get).toHaveBeenCalledWith('library/user/ab/cd/file.jpg');
       expect(mockDiskBackend.put).toHaveBeenCalledWith('/usr/src/app/upload/library/user/ab/cd/file.jpg', mockStream);
+      expect(mocks.storageMigration.updateAssetOriginalPath).toHaveBeenCalledWith(
+        'asset-1',
+        toDiskJob.sourcePath,
+        'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
+      );
+    });
+
+    it('copies a file between two S3 aliases under the same key', async () => {
+      const job = { ...baseJob, sourcePath: 's3://default/upload/user/ab/cd/file.jpg', target: 's3://archive' };
+      const mockStream = Readable.from([]);
+      mockS3Backend.exists.mockResolvedValue(true);
+      mockArchiveBackend.exists.mockResolvedValue(false);
+      mockS3Backend.get.mockResolvedValue({ stream: mockStream });
+      mocks.storageMigration.updateAssetOriginalPath.mockResolvedValue(true);
+      mocks.storageMigration.createLogEntry.mockResolvedValue({} as any);
+
+      const result = await sut.handleMigration(job);
+
+      expect(result).toBe(JobStatus.Success);
+      expect(mockArchiveBackend.put).toHaveBeenCalledWith('upload/user/ab/cd/file.jpg', mockStream);
+      expect(mocks.storageMigration.updateAssetOriginalPath).toHaveBeenCalledWith(
+        'asset-1',
+        job.sourcePath,
+        's3://archive/upload/user/ab/cd/file.jpg',
+      );
+    });
+
+    it('refuses a target on an unknown alias without touching the file', async () => {
+      const result = await sut.handleMigration({ ...baseJob, target: 's3://nowhere' });
+
+      expect(result).toBe(JobStatus.Failed);
+      expect(mockDiskBackend.get).not.toHaveBeenCalled();
+      expect(mocks.storageMigration.updateAssetOriginalPath).not.toHaveBeenCalled();
     });
 
     it('should update encoded video path for encodedVideo file type', async () => {
       const encodedVideoJob = {
         ...baseJob,
         fileType: 'encodedVideo',
-        sourcePath: '/usr/src/app/upload/encoded-video/user/ab/cd/video.mp4',
+        sourcePath: 'file:///usr/src/app/upload/encoded-video/user/ab/cd/video.mp4',
       };
 
       const mockStream = Readable.from([]);
@@ -542,7 +571,7 @@ describe(StorageMigrationService.name, () => {
       expect(mocks.storageMigration.updateAssetEncodedVideoPath).toHaveBeenCalledWith(
         'asset-1',
         encodedVideoJob.sourcePath,
-        'encoded-video/user/ab/cd/video.mp4',
+        's3://default/encoded-video/user/ab/cd/video.mp4',
       );
     });
 
@@ -552,7 +581,7 @@ describe(StorageMigrationService.name, () => {
         entityType: 'assetFile' as const,
         entityId: 'file-1',
         fileType: AssetFileType.Thumbnail,
-        sourcePath: '/usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
+        sourcePath: 'file:///usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
       };
 
       const mockStream = Readable.from([]);
@@ -569,7 +598,7 @@ describe(StorageMigrationService.name, () => {
       expect(mocks.storageMigration.updateAssetFilePath).toHaveBeenCalledWith(
         'file-1',
         assetFileJob.sourcePath,
-        'thumbs/user/ab/cd/thumb.webp',
+        's3://default/thumbs/user/ab/cd/thumb.webp',
       );
     });
 
@@ -579,7 +608,7 @@ describe(StorageMigrationService.name, () => {
         entityType: 'person' as const,
         entityId: 'person-1',
         fileType: null,
-        sourcePath: '/usr/src/app/upload/thumbs/user/ab/cd/person.jpeg',
+        sourcePath: 'file:///usr/src/app/upload/thumbs/user/ab/cd/person.jpeg',
       };
 
       const mockStream = Readable.from([]);
@@ -596,7 +625,7 @@ describe(StorageMigrationService.name, () => {
       expect(mocks.storageMigration.updatePersonThumbnailPath).toHaveBeenCalledWith(
         'person-1',
         personJob.sourcePath,
-        'thumbs/user/ab/cd/person.jpeg',
+        's3://default/thumbs/user/ab/cd/person.jpeg',
       );
     });
 
@@ -606,7 +635,7 @@ describe(StorageMigrationService.name, () => {
         entityType: 'user' as const,
         entityId: 'user-1',
         fileType: null,
-        sourcePath: '/usr/src/app/upload/profile/user/ab/cd/profile.jpg',
+        sourcePath: 'file:///usr/src/app/upload/profile/user/ab/cd/profile.jpg',
       };
 
       const mockStream = Readable.from([]);
@@ -623,7 +652,7 @@ describe(StorageMigrationService.name, () => {
       expect(mocks.storageMigration.updateUserProfileImagePath).toHaveBeenCalledWith(
         'user-1',
         userJob.sourcePath,
-        'profile/user/ab/cd/profile.jpg',
+        's3://default/profile/user/ab/cd/profile.jpg',
       );
     });
   });
@@ -636,9 +665,9 @@ describe(StorageMigrationService.name, () => {
           entityType: 'asset',
           entityId: 'asset-1',
           fileType: 'original',
-          oldPath: '/usr/src/app/upload/library/user/ab/cd/file.jpg',
-          newPath: 'library/user/ab/cd/file.jpg',
-          direction: 'toS3',
+          oldPath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
+          newPath: 's3://default/library/user/ab/cd/file.jpg',
+          target: 's3://default',
           batchId: 'batch-1',
           createdAt: new Date(),
         },
@@ -647,9 +676,9 @@ describe(StorageMigrationService.name, () => {
           entityType: 'assetFile',
           entityId: 'file-1',
           fileType: AssetFileType.Thumbnail,
-          oldPath: '/usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
-          newPath: 'thumbs/user/ab/cd/thumb.webp',
-          direction: 'toS3',
+          oldPath: 'file:///usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
+          newPath: 's3://default/thumbs/user/ab/cd/thumb.webp',
+          target: 's3://default',
           batchId: 'batch-1',
           createdAt: new Date(),
         },
@@ -666,13 +695,13 @@ describe(StorageMigrationService.name, () => {
       // Rollback swaps newPath -> oldPath
       expect(mocks.storageMigration.updateAssetOriginalPath).toHaveBeenCalledWith(
         'asset-1',
-        'library/user/ab/cd/file.jpg',
-        '/usr/src/app/upload/library/user/ab/cd/file.jpg',
+        's3://default/library/user/ab/cd/file.jpg',
+        'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
       );
       expect(mocks.storageMigration.updateAssetFilePath).toHaveBeenCalledWith(
         'file-1',
-        'thumbs/user/ab/cd/thumb.webp',
-        '/usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
+        's3://default/thumbs/user/ab/cd/thumb.webp',
+        'file:///usr/src/app/upload/thumbs/user/ab/cd/thumb.webp',
       );
       expect(mocks.storageMigration.deleteLogEntriesByBatch).toHaveBeenCalledWith('batch-1');
     });
@@ -694,9 +723,9 @@ describe(StorageMigrationService.name, () => {
           entityType: 'asset',
           entityId: 'asset-1',
           fileType: 'original',
-          oldPath: '/usr/src/app/upload/library/user/ab/cd/file.jpg',
-          newPath: 'library/user/ab/cd/file.jpg',
-          direction: 'toS3',
+          oldPath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
+          newPath: 's3://default/library/user/ab/cd/file.jpg',
+          target: 's3://default',
           batchId: 'batch-1',
           createdAt: new Date(),
         },
@@ -705,9 +734,9 @@ describe(StorageMigrationService.name, () => {
           entityType: 'asset',
           entityId: 'asset-2',
           fileType: 'original',
-          oldPath: '/usr/src/app/upload/library/user/ef/gh/file2.jpg',
-          newPath: 'library/user/ef/gh/file2.jpg',
-          direction: 'toS3',
+          oldPath: 'file:///usr/src/app/upload/library/user/ef/gh/file2.jpg',
+          newPath: 's3://default/library/user/ef/gh/file2.jpg',
+          target: 's3://default',
           batchId: 'batch-1',
           createdAt: new Date(),
         },
@@ -731,9 +760,9 @@ describe(StorageMigrationService.name, () => {
           entityType: 'asset',
           entityId: 'asset-1',
           fileType: 'original',
-          oldPath: '/usr/src/app/upload/library/user/ab/cd/file.jpg',
-          newPath: 'library/user/ab/cd/file.jpg',
-          direction: 'toS3',
+          oldPath: 'file:///usr/src/app/upload/library/user/ab/cd/file.jpg',
+          newPath: 's3://default/library/user/ab/cd/file.jpg',
+          target: 's3://default',
           batchId: 'batch-1',
           createdAt: new Date(),
         },

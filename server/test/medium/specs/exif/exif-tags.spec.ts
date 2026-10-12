@@ -11,7 +11,7 @@ const setup = async (testAssetPath: string) => {
 
   const { user } = await ctx.newUser();
   const originalPath = resolve(testAssetsDir, testAssetPath);
-  const { asset } = await ctx.newAsset({ ownerId: user.id, originalPath });
+  const { asset } = await ctx.newAsset({ ownerId: user.id, originalPath: `file://${originalPath}` });
 
   return { ctx, sut: ctx.sut, asset };
 };

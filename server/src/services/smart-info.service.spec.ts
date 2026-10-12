@@ -1,4 +1,5 @@
 import type { VideoInfo } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { SystemConfig } from 'src/dtos/config.dto.js';
 import { AssetFileType, AssetType, AssetVisibility, ImmichWorker, JobName, JobStatus } from 'src/enum.js';
 import { SmartInfoService } from 'src/services/smart-info.service.js';
@@ -266,7 +267,7 @@ describe(SmartInfoService.name, () => {
 
         expect(await sut.handleEncodeClip({ id: asset.id })).toEqual(JobStatus.Success);
 
-        expect(mocks.media.probe).toHaveBeenCalledWith(asset.originalPath);
+        expect(mocks.media.probe).toHaveBeenCalledWith(diskPathOf(asset.originalPath));
         expect(mocks.media.extractVideoFrames).toHaveBeenCalledTimes(1);
         expect(mocks.machineLearning.encodeImage).toHaveBeenCalledTimes(8);
         expect(mocks.search.upsert).toHaveBeenCalledTimes(1);
@@ -499,7 +500,10 @@ describe(SmartInfoService.name, () => {
 
     describe('handleEncodeClip — disk video regression', () => {
       it('still works when originalPath is absolute (no-op cleanup)', async () => {
-        const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/usr/src/app/upload/abc/foo.mp4' })
+        const asset = AssetFactory.from({
+          type: AssetType.Video,
+          originalPath: 'file:///usr/src/app/upload/abc/foo.mp4',
+        })
           .file({ type: AssetFileType.Preview })
           .build();
         mocks.assetJob.getForClipEncoding.mockResolvedValue(asset);

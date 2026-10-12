@@ -870,7 +870,7 @@ const setupView = () =>
 const mkPathAsset = async (ctx: MediumTestContext, ownerId: string, subdir: string, basePath: string) => {
   const { asset } = await ctx.newAsset({
     ownerId,
-    originalPath: `${basePath}/${subdir}/photo.jpg`,
+    originalPath: `file://${basePath}/${subdir}/photo.jpg`,
     fileCreatedAt: WHEN,
     localDateTime: WHEN,
   });

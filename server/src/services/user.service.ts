@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { JobOf, UserMetadataItem } from 'src/types.js';
-import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { SALT_ROUNDS } from 'src/constants.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
@@ -16,7 +16,7 @@ import { OnboardingDto, OnboardingResponseDto } from 'src/dtos/onboarding.dto.js
 import { UserPreferencesResponseDto, UserPreferencesUpdateDto, mapPreferences } from 'src/dtos/user-preferences.dto.js';
 import { CreateProfileImageResponseDto } from 'src/dtos/user-profile.dto.js';
 import { UserAdminResponseDto, UserResponseDto, UserUpdateMeDto, mapUser, mapUserAdmin } from 'src/dtos/user.dto.js';
-import { CacheControl, JobName, JobStatus, QueueName, StorageFolder, UserMetadataKey } from 'src/enum.js';
+import { CacheControl, JobName, JobStatus, QueueName, StorageFolder, UserMetadataKey, UserPathType } from 'src/enum.js';
 import { UserFindOptions } from 'src/repositories/user.repository.js';
 import { UserTable } from 'src/schema/tables/user.table.js';
 import { BaseService } from 'src/services/base.service.js';
@@ -121,20 +121,27 @@ export class UserService extends BaseService {
         file.path,
       );
     } catch (error) {
-      await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [file.path] } });
+      await this.jobRepository.queue({
+        name: JobName.FileDelete,
+        data: { files: [toStorageUri(DISK, file.path)] },
+      });
       throw new BadRequestException('Unable to process profile image', { cause: error });
     }
 
-    const writeBackend = StorageService.getWriteBackend();
-
-    if (!(writeBackend instanceof DiskStorageBackend)) {
-      const filename = basename(profileImagePath);
-      const relativeKey = StorageCore.getRelativeProfileImagePath(auth.user.id, filename);
-      const stream = createReadStream(profileImagePath);
-      await writeBackend.put(relativeKey, stream, { contentType: mimeTypes.lookup(profileImagePath) });
-      // After S3 upload, drop the local generated file and store the relative key.
-      await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [profileImagePath] } });
-      profileImagePath = relativeKey;
+    const target = StorageService.getWriteTarget(UserPathType.Profile);
+    if (target.type === 'disk') {
+      profileImagePath = toStorageUri(target, profileImagePath);
+    } else {
+      const localPath = profileImagePath;
+      const key = StorageCore.getRelativeProfileImagePath(auth.user.id, basename(localPath));
+      profileImagePath = toStorageUri(target, key);
+      const { backend } = StorageService.resolve(profileImagePath);
+      await backend.put(key, createReadStream(localPath), { contentType: mimeTypes.lookup(localPath) });
+      // the profile image now lives on the alias, so the local copy is only scratch
+      await this.jobRepository.queue({
+        name: JobName.FileDelete,
+        data: { files: [toStorageUri(DISK, localPath)] },
+      });
     }
 
     const user = await this.userRepository.update(auth.user.id, {
@@ -142,7 +149,7 @@ export class UserService extends BaseService {
       profileChangedAt: new Date(),
     });
 
-    const toDelete = [file.path, ...(oldPath ? [oldPath] : [])];
+    const toDelete = [toStorageUri(DISK, file.path), ...(oldPath ? [oldPath] : [])];
     await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: toDelete } });
 
     return {
@@ -306,8 +313,7 @@ export class UserService extends BaseService {
     // S3: clean the user-scoped relative prefixes. Library and Backups are intentionally
     // excluded — storage-template migration is a no-op on S3 (StorageCore.moveFile guard),
     // so S3 never writes to library/; Backups is admin/global scope.
-    const s3 = StorageService.getS3Backend();
-    if (s3) {
+    for (const [alias, s3] of StorageService.getAliasBackends()) {
       const userScopedS3Folders = [
         StorageFolder.Upload,
         StorageFolder.Profile,
@@ -318,9 +324,9 @@ export class UserService extends BaseService {
         const prefix = `${folder}/${user.id}/`;
         try {
           await s3.deletePrefix(prefix);
-          this.logger.log(`Cleaned S3 prefix ${prefix}`);
+          this.logger.log(`Cleaned S3 prefix ${prefix} on ${alias}`);
         } catch (error) {
-          this.logger.warn(`Failed to clean S3 prefix ${prefix} for user ${user.id}`, error);
+          this.logger.warn(`Failed to clean S3 prefix ${prefix} on ${alias} for user ${user.id}`, error);
         }
       }
     }

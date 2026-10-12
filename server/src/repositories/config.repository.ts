@@ -9,7 +9,10 @@ import { CLS_ID, ClsModuleOptions } from 'nestjs-cls';
 import { OpenTelemetryModuleOptions } from 'nestjs-otel/lib/interfaces/index.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import z from 'zod';
+import type { S3StorageConfig } from 'src/backends/s3-storage.backend.js';
 import type { VectorExtension } from 'src/types.js';
+import { StorageTarget, parseStorageTarget } from 'src/backends/storage-backend.provider.js';
 import { IWorker, citiesFile } from 'src/constants.js';
 import { Telemetry } from 'src/decorators.js';
 import { EnvSchema } from 'src/dtos/env.dto.js';
@@ -127,6 +130,14 @@ export interface EnvData {
       presignedUrlExpiry: number;
       serveMode: 'redirect' | 'proxy';
     };
+    /** Every configured S3 alias by name; the legacy `IMMICH_S3_*` settings define `default`. */
+    aliases: Record<string, S3StorageConfig>;
+    writeTargets: {
+      /** original files, sidecars and user profile images */
+      originals: StorageTarget;
+      /** thumbnails, previews, fullsize, encoded video and person thumbnails */
+      derivatives: StorageTarget;
+    };
   };
 
   workers: ImmichWorker[];
@@ -179,6 +190,74 @@ const resolveHelmetFile = (helmetFile: 'true' | 'false' | string | undefined) =>
   }
 };
 
+const STORAGE_ALIAS_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+const S3AliasEnvSchema = z.object({
+  BUCKET: z.string().min(1),
+  REGION: z.string().optional(),
+  ENDPOINT: z.string().optional(),
+  ACCESS_KEY_ID: z.string().optional(),
+  SECRET_ACCESS_KEY: z.string().optional(),
+  PRESIGNED_URL_EXPIRY: z.coerce.number().int().optional(),
+  SERVE_MODE: z.enum(['redirect', 'proxy']).optional(),
+});
+
+const toS3StorageConfig = (settings: z.infer<typeof S3AliasEnvSchema>): S3StorageConfig => ({
+  bucket: settings.BUCKET,
+  region: settings.REGION || 'us-east-1',
+  endpoint: settings.ENDPOINT,
+  accessKeyId: settings.ACCESS_KEY_ID,
+  secretAccessKey: settings.SECRET_ACCESS_KEY,
+  presignedUrlExpiry: settings.PRESIGNED_URL_EXPIRY || 3600,
+  serveMode: settings.SERVE_MODE || 'redirect',
+});
+
+/** Named aliases read `IMMICH_S3_<ALIAS>_*`, with the alias upper-cased and `-` mapped to `_`. */
+const getStorageAliases = (list: string | undefined, legacy: S3StorageConfig): Record<string, S3StorageConfig> => {
+  const aliases: Record<string, S3StorageConfig> = {};
+  if (legacy.bucket) {
+    aliases.default = legacy;
+  }
+
+  const names = (list ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  for (const alias of names) {
+    if (!STORAGE_ALIAS_NAME.test(alias)) {
+      throw new Error(`Invalid storage alias "${alias}": use lowercase letters, digits and dashes`);
+    }
+    const prefix = `IMMICH_S3_${alias.toUpperCase().replaceAll('-', '_')}_`;
+    const settings = Object.fromEntries(
+      Object.entries(process.env)
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, value]) => [key.slice(prefix.length), value]),
+    );
+    const result = S3AliasEnvSchema.safeParse(settings);
+    if (!result.success) {
+      const fields = result.error.issues.map((issue) => `${prefix}${issue.path.join('.')}`);
+      throw new Error(`Invalid settings for storage alias "${alias}": ${fields.join(', ')}`);
+    }
+    aliases[alias] = toS3StorageConfig(result.data);
+  }
+
+  return aliases;
+};
+
+const getWriteTarget = (
+  variable: string,
+  value: string | undefined,
+  fallback: StorageTarget,
+  aliases: Record<string, S3StorageConfig>,
+): StorageTarget => {
+  const target = value ? parseStorageTarget(value) : fallback;
+  if (target.type === 's3' && !aliases[target.alias]) {
+    const setting = value ? `${variable}=${value}` : 'IMMICH_STORAGE_BACKEND=s3';
+    throw new Error(`${setting} writes to storage alias "${target.alias}", which is not configured`);
+  }
+  return target;
+};
+
 const getEnv = (): EnvData => {
   const parseResult = EnvSchema.safeParse(process.env);
   if (!parseResult.success) {
@@ -199,6 +278,19 @@ const getEnv = (): EnvData => {
       throw new Error(`Invalid worker(s) found: ${workers.join(',')}`);
     }
   }
+
+  const legacyS3: S3StorageConfig = {
+    bucket: dto.IMMICH_S3_BUCKET || '',
+    region: dto.IMMICH_S3_REGION || 'us-east-1',
+    endpoint: dto.IMMICH_S3_ENDPOINT,
+    accessKeyId: dto.IMMICH_S3_ACCESS_KEY_ID,
+    secretAccessKey: dto.IMMICH_S3_SECRET_ACCESS_KEY,
+    presignedUrlExpiry: dto.IMMICH_S3_PRESIGNED_URL_EXPIRY || 3600,
+    serveMode: dto.IMMICH_S3_SERVE_MODE || 'redirect',
+  };
+  const storageAliases = getStorageAliases(dto.IMMICH_STORAGE_ALIASES, legacyS3);
+  const legacyWriteTarget: StorageTarget =
+    dto.IMMICH_STORAGE_BACKEND === 's3' ? { type: 's3', alias: 'default' } : { type: 'disk' };
 
   const environment = dto.IMMICH_ENV || ImmichEnvironment.Production;
   const isProd = environment === ImmichEnvironment.Production;
@@ -371,14 +463,21 @@ const getEnv = (): EnvData => {
       backend: (dto.IMMICH_STORAGE_BACKEND as 'disk' | 's3') || 'disk',
       ignoreMountCheckErrors: !!dto.IMMICH_IGNORE_MOUNT_CHECK_ERRORS,
       mediaLocation: dto.IMMICH_MEDIA_LOCATION,
-      s3: {
-        bucket: dto.IMMICH_S3_BUCKET || '',
-        region: dto.IMMICH_S3_REGION || 'us-east-1',
-        endpoint: dto.IMMICH_S3_ENDPOINT,
-        accessKeyId: dto.IMMICH_S3_ACCESS_KEY_ID,
-        secretAccessKey: dto.IMMICH_S3_SECRET_ACCESS_KEY,
-        presignedUrlExpiry: dto.IMMICH_S3_PRESIGNED_URL_EXPIRY || 3600,
-        serveMode: (dto.IMMICH_S3_SERVE_MODE as 'redirect' | 'proxy') || 'redirect',
+      s3: legacyS3,
+      aliases: storageAliases,
+      writeTargets: {
+        originals: getWriteTarget(
+          'IMMICH_STORAGE_WRITE_ORIGINALS',
+          dto.IMMICH_STORAGE_WRITE_ORIGINALS,
+          legacyWriteTarget,
+          storageAliases,
+        ),
+        derivatives: getWriteTarget(
+          'IMMICH_STORAGE_WRITE_DERIVATIVES',
+          dto.IMMICH_STORAGE_WRITE_DERIVATIVES,
+          legacyWriteTarget,
+          storageAliases,
+        ),
       },
     },
 

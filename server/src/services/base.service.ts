@@ -3,7 +3,7 @@ import { Insertable } from 'kysely';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import sanitize from 'sanitize-filename';
 import type { ClassConstructor, GenerateThumbnailOptions, ImageDimensions } from 'src/types.js';
 import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
@@ -427,10 +427,10 @@ export class BaseService {
     disposition: ContentDisposition = 'inline',
     options: { range?: string; acceptsRanges?: boolean } = {},
   ): Promise<ImmichMediaResponse> {
-    const backend = await this.backendFor(filePath);
+    const { backend, key } = await this.resolveStored(filePath);
     let strategy: ServeStrategy;
     try {
-      strategy = await backend.getServeStrategy(filePath, {
+      strategy = await backend.getServeStrategy(key, {
         contentType,
         cacheControl,
         fileName,
@@ -442,6 +442,7 @@ export class BaseService {
       if (error instanceof RangeNotSatisfiableError) {
         throw new HttpException('Requested range not satisfiable', HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
       }
+      this.logger.error(`Unable to serve ${filePath}: ${error}`);
       throw error;
     }
     const responseDisposition = disposition === 'inline' ? undefined : disposition;
@@ -482,41 +483,36 @@ export class BaseService {
    * tools that require a filesystem path (ffmpeg, exiftool, sharp). Caller is
    * responsible for catching `downloadToTemp` errors or letting them propagate.
    *
-   * @param filePath absolute disk path OR S3 relative key (anything that might
-   *                 come from a DB column such as `asset.originalPath`).
+   * @param filePath a stored path, as held in a DB column such as `asset.originalPath`.
    * @returns { localPath, cleanup } — cleanup is a no-op for disk paths and
    *          removes the temp file for S3-sourced paths. Always call cleanup
    *          in a `finally` block.
    */
   protected async ensureLocalFile(filePath: string): Promise<{ localPath: string; cleanup: () => Promise<void> }> {
-    const backend = await this.backendFor(filePath);
-    const { tempPath, cleanup } = await backend.downloadToTemp(filePath);
+    const { backend, key } = await this.resolveStored(filePath);
+    const { tempPath, cleanup } = await backend.downloadToTemp(key);
     return { localPath: tempPath, cleanup };
   }
 
   /**
-   * Returns something ffmpeg/ffprobe can read directly: an absolute path as-is,
-   * or a presigned URL for a storage-backend key. Unlike ensureLocalFile this
+   * Returns something ffmpeg/ffprobe can read directly: the absolute path of a disk file,
+   * or a presigned URL for an S3 object. Unlike ensureLocalFile this
    * does NOT download the object, so it is safe to call inside a request handler.
    */
   protected async getProbeInput(filePath: string): Promise<string> {
-    const backend = await this.backendFor(filePath);
-    return backend.getReadableUrl(filePath);
+    const { backend, key } = await this.resolveStored(filePath);
+    return backend.getReadableUrl(key);
   }
 
   /**
-   * The storage backend that owns `key`: disk for an absolute path, built over this service's
-   * StorageRepository so disk I/O goes where upstream code (and its specs) expect it; otherwise
-   * whatever StorageService resolves for a relative key.
+   * The backend and key behind a stored path. Disk files go through this service's
+   * StorageRepository, so disk I/O lands where upstream code (and its specs) expect it.
    */
-  protected async backendFor(key: string): Promise<StorageBackend> {
-    if (isAbsolute(key)) {
-      // the media location only resolves relative keys, and this backend is only given absolute ones
-      return new DiskStorageBackend('', this.storageRepository);
-    }
+  protected async resolveStored(path: string): Promise<{ backend: StorageBackend; key: string }> {
     // lazy import to avoid circular dependency (StorageService extends BaseService)
     const { StorageService } = await import('./storage.service.js');
-    return StorageService.resolveBackendForKey(key);
+    // the media location only resolves relative keys, and this backend is only given absolute ones
+    return StorageService.resolve(path, new DiskStorageBackend('', this.storageRepository));
   }
 
   protected async getFaceThumbnailSource(assetId: string): Promise<string | null> {
@@ -696,7 +692,7 @@ export class BaseService {
     // the physical figure with the originals-only one.
     // lazy import to avoid circular dependency (StorageService extends BaseService)
     const { StorageService } = await import('./storage.service.js');
-    const s3 = StorageService.getS3Backend();
+    const s3Backends = StorageService.getAliasBackends().values().toArray();
     const users = id
       ? [await this.userRepository.get(id, { withDeleted: false })].filter((user): user is UserAdmin => !!user)
       : await this.userRepository.getList({ withDeleted: false });
@@ -706,7 +702,7 @@ export class BaseService {
         user,
         assetRepository: this.assetRepository,
         storageRepository: this.storageRepository,
-        s3,
+        s3Backends,
       });
       await this.userRepository.setUsage(user.id, usage);
     }

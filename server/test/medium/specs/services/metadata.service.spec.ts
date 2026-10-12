@@ -266,7 +266,7 @@ describe(MetadataService.name, () => {
       ctx.getMock(EventRepository).emit.mockResolvedValue();
       const { filePath } = await createTestFile(exifData);
       const { user } = await ctx.newUser();
-      const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+      const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
       await ctx.newExif({ assetId: asset.id, description: '' });
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -293,7 +293,7 @@ describe(MetadataService.name, () => {
       ctx.getMock(EventRepository).emit.mockResolvedValue();
       const { filePath } = await createTestFile({ CreateDate: '42603:05:04 04:12:48' });
       const { user } = await ctx.newUser();
-      const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+      const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
       await ctx.newExif({ assetId: asset.id, description: '' });
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -313,7 +313,7 @@ describe(MetadataService.name, () => {
       ctx.getMock(EventRepository).emit.mockResolvedValue();
       const { filePath } = await createTestFile({ 'IFD1:Orientation#': 6 });
       const { user } = await ctx.newUser();
-      const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+      const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
       await ctx.newExif({ assetId: asset.id, description: '' });
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -332,7 +332,7 @@ describe(MetadataService.name, () => {
       ctx.getMock(EventRepository).emit.mockResolvedValue();
       const { filePath } = await createTestFile({ 'IFD1:ImageWidth#': 160, 'IFD1:ImageHeight#': 120 });
       const { user } = await ctx.newUser();
-      const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+      const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
       await ctx.newExif({ assetId: asset.id, description: '' });
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -347,7 +347,7 @@ describe(MetadataService.name, () => {
       ctx.getMock(EventRepository).emit.mockResolvedValue();
       const { filePath } = await createTestFile({ 'IFD0:Orientation#': 6 });
       const { user } = await ctx.newUser();
-      const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+      const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
       await ctx.newExif({ assetId: asset.id, description: '' });
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -366,7 +366,7 @@ describe(MetadataService.name, () => {
       const { user } = await ctx.newUser();
       const { asset } = await ctx.newAsset({
         ownerId: user.id,
-        originalPath: '/photos/alice.jpg',
+        originalPath: 'file:///photos/alice.jpg',
         visibility: AssetVisibility.Timeline,
       });
       await ctx.newExif({ assetId: asset.id, description: '' });
@@ -403,7 +403,7 @@ describe(MetadataService.name, () => {
       const { user } = await ctx.newUser();
       const { asset } = await ctx.newAsset({
         ownerId: user.id,
-        originalPath: '/photos/renamed-face.jpg',
+        originalPath: 'file:///photos/renamed-face.jpg',
         visibility: AssetVisibility.Timeline,
       });
       await ctx.newExif({ assetId: asset.id, description: '' });
@@ -434,7 +434,7 @@ describe(MetadataService.name, () => {
       });
       const { asset } = await ctx.newAsset({
         ownerId: user.id,
-        originalPath: '/photos/existing-person.jpg',
+        originalPath: 'file:///photos/existing-person.jpg',
         visibility: AssetVisibility.Timeline,
       });
       await ctx.newExif({ assetId: asset.id, description: '' });
@@ -473,7 +473,7 @@ describe(MetadataService.name, () => {
       const { user } = await ctx.newUser();
       const { asset } = await ctx.newAsset({
         ownerId: user.id,
-        originalPath: '/photos/space-person.jpg',
+        originalPath: 'file:///photos/space-person.jpg',
         visibility: AssetVisibility.Timeline,
       });
       const { space } = await ctx.newSharedSpace({ createdById: user.id, faceRecognitionEnabled: true });
@@ -535,7 +535,7 @@ describe(MetadataService.name, () => {
       });
       const { asset } = await ctx.newAsset({
         ownerId: user.id,
-        originalPath: '/photos/legacy-space-person.jpg',
+        originalPath: 'file:///photos/legacy-space-person.jpg',
         visibility: AssetVisibility.Timeline,
       });
       const { assetFace } = await ctx.newAssetFace({
@@ -613,7 +613,7 @@ describe(MetadataService.name, () => {
     ctx.getMock(EventRepository).emit.mockResolvedValue();
     const { filePath } = await createTestFile({ LensModel: 1.8 });
     const { user } = await ctx.newUser();
-    const { asset } = await ctx.newAsset({ originalPath: filePath, ownerId: user.id });
+    const { asset } = await ctx.newAsset({ originalPath: `file://${filePath}`, ownerId: user.id });
     await ctx.newExif({ assetId: asset.id, description: '' });
 
     await sut.handleMetadataExtraction({ id: asset.id });

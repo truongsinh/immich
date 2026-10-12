@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { VideoInterfaces } from 'src/types.js';
+import { DISK, diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { StorageAsset } from 'src/database.js';
 import {
   AssetFileType,
@@ -27,7 +28,9 @@ export interface MoveRequest {
   /** a person is owned, so the owner is needed to save the new path */
   ownerId?: string;
   pathType: PathType;
+  /** the stored path; only a file on disk is moved */
   oldPath: string | null;
+  /** the absolute disk path to move it to */
   newPath: string;
   assetInfo?: {
     sizeInBytes: number;
@@ -146,7 +149,7 @@ export class StorageCore {
   }
 
   static isAndroidMotionPath(originalPath: string) {
-    return originalPath.startsWith(StorageCore.getBaseFolder(StorageFolder.EncodedVideo));
+    return !!diskPathOf(originalPath)?.startsWith(StorageCore.getBaseFolder(StorageFolder.EncodedVideo));
   }
 
   static isImmichPath(path: string) {
@@ -199,12 +202,9 @@ export class StorageCore {
   }
 
   async moveFile(request: MoveRequest) {
-    const { entityId, ownerId, pathType, oldPath, newPath, assetInfo } = request;
+    const { entityId, ownerId, pathType, newPath, assetInfo } = request;
+    const oldPath = request.oldPath && diskPathOf(request.oldPath);
     if (!oldPath || oldPath === newPath) {
-      return;
-    }
-
-    if (!isAbsolute(oldPath)) {
       return;
     }
 
@@ -328,7 +328,7 @@ export class StorageCore {
   private savePath(pathType: PathType, id: string, newPath: string, ownerId?: string) {
     switch (pathType) {
       case AssetPathType.Original: {
-        return this.assetRepository.update({ id, originalPath: newPath });
+        return this.assetRepository.update({ id, originalPath: toStorageUri(DISK, newPath) });
       }
 
       case AssetFileType.FullSize:
@@ -337,7 +337,11 @@ export class StorageCore {
       case AssetFileType.Preview:
       case AssetFileType.Sidecar:
       case AssetPathType.EncodedVideo: {
-        return this.assetRepository.upsertFile({ assetId: id, type: pathType as AssetFileType, path: newPath });
+        return this.assetRepository.upsertFile({
+          assetId: id,
+          type: pathType as AssetFileType,
+          path: toStorageUri(DISK, newPath),
+        });
       }
 
       case PersonPathType.Face: {
@@ -346,7 +350,7 @@ export class StorageCore {
           return;
         }
 
-        return this.personRepository.update({ ownerId, personGroupId: id, thumbnailPath: newPath });
+        return this.personRepository.update({ ownerId, personGroupId: id, thumbnailPath: toStorageUri(DISK, newPath) });
       }
 
       case UserPathType.Profile: {

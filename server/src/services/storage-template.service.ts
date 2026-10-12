@@ -5,6 +5,7 @@ import path from 'node:path';
 import sanitize from 'sanitize-filename';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { JobOf, StorageAsset } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import { ConfigTemplateStorageOptionDto } from 'src/dtos/config.dto.js';
@@ -153,7 +154,7 @@ export class StorageTemplateService extends BaseService {
       return JobStatus.Failed;
     }
 
-    if (!path.isAbsolute(asset.originalPath)) {
+    if (!diskPathOf(asset.originalPath)) {
       this.logger.debug(`Skipping storage template migration for S3 asset ${id}`);
       return JobStatus.Skipped;
     }
@@ -238,8 +239,9 @@ export class StorageTemplateService extends BaseService {
       return;
     }
 
-    if (!path.isAbsolute(asset.originalPath)) {
-      // S3 relative keys cannot be moved through fs.rename — S3 has its own placement rules.
+    const diskPath = diskPathOf(asset.originalPath);
+    if (!diskPath) {
+      // files on an S3 alias cannot be moved through fs.rename — S3 has its own placement rules.
       this.logger.debug(`Skipping storage template migration for S3 asset ${asset.id}`);
       return;
     }
@@ -247,7 +249,7 @@ export class StorageTemplateService extends BaseService {
     return this.databaseRepository.withLock(DatabaseLock.StorageTemplateMigration, async () => {
       const { id, originalPath, checksum, fileSizeInByte } = asset;
       const oldPath = originalPath;
-      const newPath = await this.getTemplatePath(asset, metadata, stillPhoto);
+      const newPath = await this.getTemplatePath({ ...asset, originalPath: diskPath }, metadata, stillPhoto);
 
       if (!fileSizeInByte) {
         this.logger.error(`Asset ${id} missing exif info, skipping storage template migration`);

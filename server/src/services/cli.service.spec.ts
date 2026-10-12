@@ -516,11 +516,11 @@ describe(CliService.name, () => {
 
   describe('getSampleFilePaths', () => {
     it('should return file paths from assets, people, and users', async () => {
-      mocks.asset.getFileSamples.mockResolvedValue([{ assetId: newUuid(), path: '/data/asset1.jpg' }]);
+      mocks.asset.getFileSamples.mockResolvedValue([{ assetId: newUuid(), path: 'file:///data/asset1.jpg' }]);
       mocks.person.getFileSamples.mockResolvedValue([
-        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: '/data/person-thumb.jpg' },
+        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: 'file:///data/person-thumb.jpg' },
       ]);
-      mocks.user.getFileSamples.mockResolvedValue([{ id: newUuid(), profileImagePath: '/data/profile.jpg' }]);
+      mocks.user.getFileSamples.mockResolvedValue([{ id: newUuid(), profileImagePath: 'file:///data/profile.jpg' }]);
 
       const result = await sut.getSampleFilePaths();
 
@@ -551,14 +551,14 @@ describe(CliService.name, () => {
 
     it('should include paths from multiple assets, people, and users', async () => {
       mocks.asset.getFileSamples.mockResolvedValue([
-        { assetId: newUuid(), path: '/data/asset1.jpg' },
-        { assetId: newUuid(), path: '/data/asset2.jpg' },
+        { assetId: newUuid(), path: 'file:///data/asset1.jpg' },
+        { assetId: newUuid(), path: 'file:///data/asset2.jpg' },
       ]);
       mocks.person.getFileSamples.mockResolvedValue([
-        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: '/data/person1.jpg' },
-        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: '/data/person2.jpg' },
+        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: 'file:///data/person1.jpg' },
+        { ownerId: newUuid(), personGroupId: newUuid(), thumbnailPath: 'file:///data/person2.jpg' },
       ]);
-      mocks.user.getFileSamples.mockResolvedValue([{ id: newUuid(), profileImagePath: '/data/user1.jpg' }]);
+      mocks.user.getFileSamples.mockResolvedValue([{ id: newUuid(), profileImagePath: 'file:///data/user1.jpg' }]);
 
       const result = await sut.getSampleFilePaths();
 

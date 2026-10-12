@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { Reflector } from '@nestjs/core';
 import { writeFile } from 'node:fs/promises';
 import type { SystemConfig } from 'src/dtos/config.dto.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { BulkIdErrorReason } from 'src/dtos/asset-ids.response.dto.js';
 import { PersonUserRole, mapFaces, mapPerson } from 'src/dtos/person.dto.js';
 import { QueueStatisticsDto } from 'src/dtos/queue.dto.js';
@@ -1042,7 +1043,7 @@ describe(PersonService.name, () => {
       mocks.access.person.checkUnlockedThumbnailAccess.mockResolvedValue(new Set([person.personGroupId]));
       await expect(sut.getThumbnail(auth, person.personGroupId)).resolves.toEqual(
         new ImmichFileResponse({
-          path: person.thumbnailPath,
+          path: diskPathOf(person.thumbnailPath)!,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithoutCache,
         }),
@@ -1061,7 +1062,7 @@ describe(PersonService.name, () => {
 
       await expect(sut.getThumbnail(auth, person.personGroupId)).resolves.toEqual(
         new ImmichFileResponse({
-          path: person.thumbnailPath,
+          path: diskPathOf(person.thumbnailPath)!,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithoutCache,
         }),
@@ -1098,7 +1099,7 @@ describe(PersonService.name, () => {
 
       await expect(sut.getThumbnail(auth, person.personGroupId)).resolves.toEqual(
         new ImmichFileResponse({
-          path: person.thumbnailPath,
+          path: diskPathOf(person.thumbnailPath)!,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithoutCache,
         }),
@@ -1814,8 +1815,8 @@ describe(PersonService.name, () => {
       await expect(sut.handlePersonMigration(PersonFactory.create())).resolves.toBe(JobStatus.Failed);
     });
 
-    it('should skip persons with relative S3 thumbnail paths', async () => {
-      const person = PersonFactory.create({ thumbnailPath: 'thumbs/user/ab/cd/person.jpeg' });
+    it('should skip persons with thumbnails on an S3 alias', async () => {
+      const person = PersonFactory.create({ thumbnailPath: 's3://default/thumbs/user/ab/cd/person.jpeg' });
       mocks.person.getByGroupId.mockResolvedValue(person);
 
       await expect(

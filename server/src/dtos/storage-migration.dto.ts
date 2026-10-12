@@ -1,7 +1,10 @@
 import { createZodDto } from 'nestjs-zod';
 import z from 'zod';
 
-const StorageMigrationDirectionSchema = z.enum(['toS3', 'toDisk']).meta({ id: 'StorageMigrationDirection' });
+const StorageMigrationTargetSchema = z
+  .string()
+  .regex(/^(file:\/\/|s3:\/\/[a-z0-9][a-z0-9-]*)$/)
+  .describe('Storage to move files to: file:// for disk, or s3://<alias> for a configured S3 alias');
 
 const StorageMigrationFileTypesSchema = z
   .object({
@@ -18,7 +21,7 @@ const StorageMigrationFileTypesSchema = z
 
 const StorageMigrationStartSchema = z
   .object({
-    direction: StorageMigrationDirectionSchema.describe('Migration direction'),
+    target: StorageMigrationTargetSchema,
     deleteSource: z.boolean().default(false).describe('Delete source files after migration'),
     fileTypes: StorageMigrationFileTypesSchema.describe('File types to migrate'),
     concurrency: z.int().min(1).max(20).default(5).describe('Concurrency level'),
@@ -27,7 +30,7 @@ const StorageMigrationStartSchema = z
 
 const StorageMigrationEstimateQuerySchema = z
   .object({
-    direction: StorageMigrationDirectionSchema.describe('Migration direction'),
+    target: StorageMigrationTargetSchema,
   })
   .meta({ id: 'StorageMigrationEstimateQueryDto' });
 

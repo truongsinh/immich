@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { IncomingHttpHeaders } from 'node:http';
 import { basename } from 'node:path';
 import sanitize from 'sanitize-filename';
-import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { LOGIN_DUMMY_HASH, LOGIN_URL, MOBILE_CALLBACK_URI, MOBILE_REDIRECT, SALT_ROUNDS } from 'src/constants.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { AuthSharedLink, AuthUser, UserAdmin } from 'src/database.js';
@@ -27,7 +27,7 @@ import {
 } from 'src/dtos/auth.dto.js';
 import { SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { UserAdminResponseDto, mapUserAdmin } from 'src/dtos/user.dto.js';
-import { AuthType, ImmichCookie, ImmichHeader, ImmichQuery, JobName, Permission } from 'src/enum.js';
+import { AuthType, ImmichCookie, ImmichHeader, ImmichQuery, JobName, Permission, UserPathType } from 'src/enum.js';
 import { OAuthProfile } from 'src/repositories/oauth.repository.js';
 import { BaseService } from 'src/services/base.service.js';
 import { StorageService } from 'src/services/storage.service.js';
@@ -400,16 +400,20 @@ export class AuthService extends BaseService {
         Buffer.from(data),
       );
 
-      const writeBackend = StorageService.getWriteBackend();
-
-      if (!(writeBackend instanceof DiskStorageBackend)) {
-        const filename = basename(profileImagePath);
-        const relativeKey = StorageCore.getRelativeProfileImagePath(user.id, filename);
-        const stream = createReadStream(profileImagePath);
-        await writeBackend.put(relativeKey, stream, { contentType: mimeTypes.lookup(profileImagePath) });
-        // After S3 upload, drop the local generated file and store the relative key.
-        await this.jobRepository.queue({ name: JobName.FileDelete, data: { files: [profileImagePath] } });
-        profileImagePath = relativeKey;
+      const target = StorageService.getWriteTarget(UserPathType.Profile);
+      if (target.type === 'disk') {
+        profileImagePath = toStorageUri(target, profileImagePath);
+      } else {
+        const localPath = profileImagePath;
+        const key = StorageCore.getRelativeProfileImagePath(user.id, basename(localPath));
+        profileImagePath = toStorageUri(target, key);
+        const { backend } = StorageService.resolve(profileImagePath);
+        await backend.put(key, createReadStream(localPath), { contentType: mimeTypes.lookup(localPath) });
+        // the profile image now lives on the alias, so the local copy is only scratch
+        await this.jobRepository.queue({
+          name: JobName.FileDelete,
+          data: { files: [toStorageUri(DISK, localPath)] },
+        });
       }
 
       await this.userRepository.update(user.id, { profileImagePath, profileChangedAt: new Date() });

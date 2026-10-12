@@ -1,5 +1,6 @@
 import { InjectKysely } from 'nestjs-kysely';
 import type { Expression, ExpressionBuilder, Kysely, SqlBool } from 'kysely';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { DummyValue, GenerateSql } from 'src/decorators.js';
 import { AssetVisibility } from 'src/enum.js';
 import { DB } from 'src/schema/index.js';
@@ -38,7 +39,8 @@ export class ViewRepository {
       .orderBy('directoryPath', 'asc')
       .execute();
 
-    return results.map((row) => row.directoryPath.replaceAll(/\/$/g, ''));
+    // a folder on disk shows as its filesystem path
+    return results.map((row) => (diskPathOf(row.directoryPath) ?? row.directoryPath).replaceAll(/\/$/g, ''));
   }
 
   @GenerateSql({ params: [DummyValue.UUID, DummyValue.STRING] })

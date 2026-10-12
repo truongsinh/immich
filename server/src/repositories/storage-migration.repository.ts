@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { Insertable, Kysely } from 'kysely';
 import { InjectKysely } from 'nestjs-kysely';
+import { StorageTarget, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { AssetFileType } from 'src/enum.js';
 import { DB } from 'src/schema/index.js';
 import { StorageMigrationLogTable } from 'src/schema/tables/storage-migration-log.table.js';
 
-export type StorageMigrationDirection = 'toS3' | 'toDisk';
+/** Every stored path on the target starts with this; the migration picks up all the others. */
+const targetPrefix = (target: StorageTarget) => `${toStorageUri(target, '')}%`;
 
 export interface StorageMigrationFileCounts {
   originals: number;
@@ -24,80 +26,73 @@ export class StorageMigrationRepository {
 
   // --- Streaming queries ---
 
-  streamOriginals(direction: StorageMigrationDirection) {
+  streamOriginals(target: StorageTarget) {
     return this.db
       .selectFrom('asset')
       .select(['id', 'originalPath'])
-      .$if(direction === 'toS3', (qb) => qb.where('originalPath', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('originalPath', 'not like', '/%'))
+      .where('originalPath', 'not like', targetPrefix(target))
       .stream();
   }
 
-  streamAssetFiles(direction: StorageMigrationDirection, fileTypes: AssetFileType[]) {
+  streamAssetFiles(target: StorageTarget, fileTypes: AssetFileType[]) {
     return this.db
       .selectFrom('asset_file')
       .innerJoin('asset', 'asset.id', 'asset_file.assetId')
       .select(['asset_file.id', 'asset_file.assetId', 'asset_file.path', 'asset_file.type'])
       .where('asset_file.type', 'in', fileTypes)
-      .$if(direction === 'toS3', (qb) => qb.where('asset_file.path', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('asset_file.path', 'not like', '/%'))
+      .where('asset_file.path', 'not like', targetPrefix(target))
       .stream();
   }
 
-  streamEncodedVideos(direction: StorageMigrationDirection) {
+  streamEncodedVideos(target: StorageTarget) {
     return this.db
       .selectFrom('asset_file')
       .innerJoin('asset', 'asset.id', 'asset_file.assetId')
       .select(['asset_file.id', 'asset_file.assetId', 'asset_file.path', 'asset_file.type'])
       .where('asset_file.type', '=', AssetFileType.EncodedVideo)
-      .$if(direction === 'toS3', (qb) => qb.where('asset_file.path', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('asset_file.path', 'not like', '/%'))
+      .where('asset_file.path', 'not like', targetPrefix(target))
       .stream();
   }
 
-  streamPersonThumbnails(direction: StorageMigrationDirection) {
+  streamPersonThumbnails(target: StorageTarget) {
     return this.db
       .selectFrom('person')
       .select(['personGroupId', 'thumbnailPath'])
       .where('thumbnailPath', '!=', '')
-      .$if(direction === 'toS3', (qb) => qb.where('thumbnailPath', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('thumbnailPath', 'not like', '/%'))
+      .where('thumbnailPath', 'not like', targetPrefix(target))
       .stream();
   }
 
-  streamProfileImages(direction: StorageMigrationDirection) {
+  streamProfileImages(target: StorageTarget) {
     return this.db
       .selectFrom('user')
       .select(['id', 'profileImagePath'])
       .where('profileImagePath', '!=', '')
-      .$if(direction === 'toS3', (qb) => qb.where('profileImagePath', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('profileImagePath', 'not like', '/%'))
+      .where('profileImagePath', 'not like', targetPrefix(target))
       .stream();
   }
 
   // --- Estimate queries ---
 
-  async getOriginalsSizeEstimate(direction: StorageMigrationDirection): Promise<number> {
+  async getOriginalsSizeEstimate(target: StorageTarget): Promise<number> {
     const result = await this.db
       .selectFrom('asset')
       .innerJoin('asset_exif', 'asset_exif.assetId', 'asset.id')
       .select((eb) => eb.fn.coalesce(eb.fn.sum<number>('asset_exif.fileSizeInByte'), eb.lit(0)).as('totalSize'))
-      .$if(direction === 'toS3', (qb) => qb.where('asset.originalPath', 'like', '/%'))
-      .$if(direction === 'toDisk', (qb) => qb.where('asset.originalPath', 'not like', '/%'))
+      .where('asset.originalPath', 'not like', targetPrefix(target))
       .executeTakeFirstOrThrow();
 
     return Number(result.totalSize);
   }
 
-  async getFileCounts(direction: StorageMigrationDirection): Promise<StorageMigrationFileCounts> {
-    const pathFilter = direction === 'toS3' ? 'like' : ('not like' as const);
-    const pathPattern = '/%';
+  async getFileCounts(target: StorageTarget): Promise<StorageMigrationFileCounts> {
+    const pathPattern = targetPrefix(target);
 
     const [originals, assetFiles, encodedVideos, personThumbnails, profileImages] = await Promise.all([
       this.db
         .selectFrom('asset')
         .select((eb) => eb.fn.countAll<number>().as('count'))
-        .where('originalPath', pathFilter, pathPattern)
+        .where('originalPath', 'not like', pathPattern)
         .executeTakeFirstOrThrow(),
 
       this.db
@@ -108,28 +103,28 @@ export class StorageMigrationRepository {
           eb.fn.countAll<number>().filterWhere('type', '=', AssetFileType.FullSize).as('fullsize'),
           eb.fn.countAll<number>().filterWhere('type', '=', AssetFileType.Sidecar).as('sidecars'),
         ])
-        .where('path', pathFilter, pathPattern)
+        .where('path', 'not like', pathPattern)
         .executeTakeFirstOrThrow(),
 
       this.db
         .selectFrom('asset_file')
         .select((eb) => eb.fn.countAll<number>().as('count'))
         .where('type', '=', AssetFileType.EncodedVideo)
-        .where('path', pathFilter, pathPattern)
+        .where('path', 'not like', pathPattern)
         .executeTakeFirstOrThrow(),
 
       this.db
         .selectFrom('person')
         .select((eb) => eb.fn.countAll<number>().as('count'))
         .where('thumbnailPath', '!=', '')
-        .where('thumbnailPath', pathFilter, pathPattern)
+        .where('thumbnailPath', 'not like', pathPattern)
         .executeTakeFirstOrThrow(),
 
       this.db
         .selectFrom('user')
         .select((eb) => eb.fn.countAll<number>().as('count'))
         .where('profileImagePath', '!=', '')
-        .where('profileImagePath', pathFilter, pathPattern)
+        .where('profileImagePath', 'not like', pathPattern)
         .executeTakeFirstOrThrow(),
     ]);
 

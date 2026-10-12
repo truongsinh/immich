@@ -103,12 +103,12 @@ describe('StorageCore', () => {
     });
 
     it('should return true for paths under EncodedVideo', () => {
-      const result = StorageCore.isAndroidMotionPath('/data/encoded-video/user-1/ab/cd/some-file-MP.mp4');
+      const result = StorageCore.isAndroidMotionPath('file:///data/encoded-video/user-1/ab/cd/some-file-MP.mp4');
       expect(result).toBe(true);
     });
 
     it('should return false for paths not under EncodedVideo', () => {
-      const result = StorageCore.isAndroidMotionPath('/data/library/user-1/some-file.mp4');
+      const result = StorageCore.isAndroidMotionPath('file:///data/library/user-1/some-file.mp4');
       expect(result).toBe(false);
     });
   });
@@ -258,11 +258,11 @@ describe('StorageCore', () => {
       );
     });
 
-    it('should skip when oldPath is a relative S3 key', async () => {
+    it('should skip when oldPath is on an S3 alias', async () => {
       await core.moveFile({
         entityId: 'asset-1',
         pathType: AssetPathType.Original,
-        oldPath: 'upload/user/ab/cd/file.jpg',
+        oldPath: 's3://default/upload/user/ab/cd/file.jpg',
         newPath: '/data/library/user/2021/file.jpg',
       });
       expect(mocks.storage.mkdirSync).not.toHaveBeenCalled();

@@ -434,12 +434,14 @@ export interface IStorageMigrationJob {
   fileType: string | null;
   sourcePath: string;
   batchId: string;
-  direction: 'toS3' | 'toDisk';
+  /** `file://` or `s3://<alias>` */
+  target: string;
   deleteSource: boolean;
 }
 
 export interface IStorageMigrationQueueAllJob {
-  direction: 'toS3' | 'toDisk';
+  /** `file://` or `s3://<alias>` */
+  target: string;
   deleteSource: boolean;
   fileTypes: {
     originals: boolean;

@@ -78,12 +78,12 @@ describe(IntegrityService.name, () => {
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
       });
 
       await expect(text(sut.getIntegrityReportCsv(IntegrityReport.ChecksumFail))).resolves.toMatchInlineSnapshot(`
           "id,type,assetId,fileAssetId,path
-          ${id},checksum_mismatch,null,null,"/path/to/file"
+          ${id},checksum_mismatch,null,null,"file:///path/to/file"
           "
         `);
     });
@@ -95,7 +95,7 @@ describe(IntegrityService.name, () => {
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
       });
 
       await expect(sut.getIntegrityReportFile(id)).resolves.toEqual({
@@ -123,7 +123,7 @@ describe(IntegrityService.name, () => {
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
         assetId,
       });
 
@@ -158,11 +158,11 @@ describe(IntegrityService.name, () => {
       } = await ctx.newAsset({ ownerId });
 
       const fileAssetId = randomUUID();
-      await ctx.newAssetFile({ id: fileAssetId, assetId, type: AssetFileType.Thumbnail, path: '/path/to/file' });
+      await ctx.newAssetFile({ id: fileAssetId, assetId, type: AssetFileType.Thumbnail, path: 'file:///path/to/file' });
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
         fileAssetId,
       });
 
@@ -186,7 +186,7 @@ describe(IntegrityService.name, () => {
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
       });
 
       await sut.deleteIntegrityReport(userId, id);
@@ -224,7 +224,7 @@ describe(IntegrityService.name, () => {
         name: JobName.IntegrityUntrackedFiles,
         data: {
           type: 'asset',
-          paths: expect.arrayContaining(['/path/to/file']),
+          paths: expect.arrayContaining(['file:///path/to/file']),
         },
       });
 
@@ -232,7 +232,7 @@ describe(IntegrityService.name, () => {
         name: JobName.IntegrityUntrackedFiles,
         data: {
           type: 'asset_file',
-          paths: expect.arrayContaining(['/path/to/file3']),
+          paths: expect.arrayContaining(['file:///path/to/file3']),
         },
       });
     });
@@ -247,7 +247,7 @@ describe(IntegrityService.name, () => {
 
       const { id } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.UntrackedFile,
-        path: '/path/to/file',
+        path: 'file:///path/to/file',
       });
 
       await sut.handleUntrackedFilesQueueAll({ refreshOnly: true });
@@ -258,7 +258,7 @@ describe(IntegrityService.name, () => {
         data: {
           items: expect.arrayContaining([
             {
-              path: '/path/to/file',
+              path: 'file:///path/to/file',
               reportId: id,
             },
           ]),
@@ -275,12 +275,12 @@ describe(IntegrityService.name, () => {
         result: { id: ownerId },
       } = await ctx.newUser();
 
-      const { asset } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
-      await ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.EncodedVideo, path: '/path/to/file2' });
+      const { asset } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
+      await ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.EncodedVideo, path: 'file:///path/to/file2' });
 
       await sut.handleUntrackedFiles({
         type: 'asset',
-        paths: ['/path/to/file1', '/path/to/file2', '/path/to/untracked'],
+        paths: ['file:///path/to/file1', 'file:///path/to/file2', 'file:///path/to/untracked'],
       });
 
       await expect(
@@ -293,7 +293,7 @@ describe(IntegrityService.name, () => {
       ).resolves.toEqual({
         items: [
           expect.objectContaining({
-            path: '/path/to/untracked',
+            path: 'file:///path/to/untracked',
           }),
         ],
         nextCursor: undefined,
@@ -311,11 +311,11 @@ describe(IntegrityService.name, () => {
         result: { id: assetId },
       } = await ctx.newAsset({ ownerId });
 
-      await ctx.newAssetFile({ assetId, type: AssetFileType.Thumbnail, path: '/path/to/file1' });
+      await ctx.newAssetFile({ assetId, type: AssetFileType.Thumbnail, path: 'file:///path/to/file1' });
 
       await sut.handleUntrackedFiles({
         type: 'asset_file',
-        paths: ['/path/to/file1', '/path/to/untracked'],
+        paths: ['file:///path/to/file1', 'file:///path/to/untracked'],
       });
 
       await expect(
@@ -328,7 +328,7 @@ describe(IntegrityService.name, () => {
       ).resolves.toEqual({
         items: [
           expect.objectContaining({
-            path: '/path/to/untracked',
+            path: 'file:///path/to/untracked',
           }),
         ],
         nextCursor: undefined,
@@ -349,12 +349,12 @@ describe(IntegrityService.name, () => {
 
       const report1 = await integrity.create({
         type: IntegrityReport.UntrackedFile,
-        path: '/path/to/missing1',
+        path: 'file:///path/to/missing1',
       });
 
       const report2 = await integrity.create({
         type: IntegrityReport.UntrackedFile,
-        path: '/path/to/existing',
+        path: 'file:///path/to/existing',
       });
 
       storage.stat.mockRejectedValueOnce(new Error('ENOENT')).mockResolvedValueOnce({} as never);
@@ -376,7 +376,7 @@ describe(IntegrityService.name, () => {
       ).resolves.toEqual({
         items: [
           expect.objectContaining({
-            path: '/path/to/existing',
+            path: 'file:///path/to/existing',
           }),
         ],
         nextCursor: undefined,
@@ -401,15 +401,15 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
 
       const {
         result: { id: assetId2 },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file2' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file2' });
 
       const { id: reportId } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/file2',
+        path: 'file:///path/to/file2',
         assetId: assetId2,
       });
 
@@ -419,8 +419,8 @@ describe(IntegrityService.name, () => {
         name: JobName.IntegrityMissingFiles,
         data: {
           items: expect.arrayContaining([
-            { path: '/path/to/file1', assetId, fileAssetId: null, reportId: null },
-            { path: '/path/to/file2', assetId: assetId2, fileAssetId: null, reportId },
+            { path: 'file:///path/to/file1', assetId, fileAssetId: null, reportId: null },
+            { path: 'file:///path/to/file2', assetId: assetId2, fileAssetId: null, reportId },
           ]),
         },
       });
@@ -439,7 +439,7 @@ describe(IntegrityService.name, () => {
 
       const { id: reportId } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/file1',
+        path: 'file:///path/to/file1',
       });
 
       await sut.handleMissingFilesQueueAll({ refreshOnly: true });
@@ -447,7 +447,7 @@ describe(IntegrityService.name, () => {
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityMissingFilesRefresh,
         data: {
-          items: expect.arrayContaining([{ reportId, path: '/path/to/file1' }]),
+          items: expect.arrayContaining([{ reportId, path: 'file:///path/to/file1' }]),
         },
       });
 
@@ -476,11 +476,11 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
 
       const { id: restoredId } = await integrity.create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/restored',
+        path: 'file:///path/to/restored',
         assetId,
       });
 
@@ -491,9 +491,9 @@ describe(IntegrityService.name, () => {
 
       await sut.handleMissingFiles({
         items: [
-          { path: '/path/to/existing', assetId, fileAssetId: null, reportId: null },
-          { path: '/path/to/missing', assetId, fileAssetId: null, reportId: null },
-          { path: '/path/to/restored', assetId, fileAssetId: null, reportId: restoredId },
+          { path: 'file:///path/to/existing', assetId, fileAssetId: null, reportId: null },
+          { path: 'file:///path/to/missing', assetId, fileAssetId: null, reportId: null },
+          { path: 'file:///path/to/restored', assetId, fileAssetId: null, reportId: restoredId },
         ],
       });
 
@@ -507,7 +507,7 @@ describe(IntegrityService.name, () => {
       ).resolves.toEqual({
         items: [
           expect.objectContaining({
-            path: '/path/to/missing',
+            path: 'file:///path/to/missing',
           }),
         ],
         nextCursor: undefined,
@@ -528,7 +528,7 @@ describe(IntegrityService.name, () => {
 
       const { id: restoredId } = await integrity.create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/restored',
+        path: 'file:///path/to/restored',
       });
 
       storage.stat
@@ -538,9 +538,9 @@ describe(IntegrityService.name, () => {
 
       await sut.handleMissingRefresh({
         items: [
-          { path: '/path/to/existing', reportId: null },
-          { path: '/path/to/missing', reportId: null },
-          { path: '/path/to/restored', reportId: restoredId },
+          { path: 'file:///path/to/existing', reportId: null },
+          { path: 'file:///path/to/missing', reportId: null },
+          { path: 'file:///path/to/restored', reportId: restoredId },
         ],
       });
 
@@ -575,11 +575,11 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1', checksum: Buffer.from('a') });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1', checksum: Buffer.from('a') });
 
       const { id: reportId } = await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file1',
+        path: 'file:///path/to/file1',
         assetId,
       });
 
@@ -588,7 +588,7 @@ describe(IntegrityService.name, () => {
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityChecksumFilesRefresh,
         data: {
-          items: [{ reportId, path: '/path/to/file1', checksum: '61' }],
+          items: [{ reportId, path: 'file:///path/to/file1', checksum: '61' }],
         },
       });
     });
@@ -605,12 +605,12 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1', checksum: Buffer.from('mismatched') });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1', checksum: Buffer.from('mismatched') });
 
       const fileContent1 = Buffer.from('test content');
       await ctx.newAsset({
         ownerId,
-        originalPath: '/path/to/file2',
+        originalPath: 'file:///path/to/file2',
         checksum: createHash('sha1').update(fileContent1).digest(),
       });
 
@@ -619,13 +619,13 @@ describe(IntegrityService.name, () => {
         result: { id: assetId3 },
       } = await ctx.newAsset({
         ownerId,
-        originalPath: '/path/to/file3',
+        originalPath: 'file:///path/to/file3',
         checksum: createHash('sha1').update(fileContent2).digest(),
       });
 
       await ctx.get(IntegrityRepository).create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file3',
+        path: 'file:///path/to/file3',
         assetId: assetId3,
       });
 
@@ -648,7 +648,7 @@ describe(IntegrityService.name, () => {
         items: [
           expect.objectContaining({
             assetId,
-            path: '/path/to/file1',
+            path: 'file:///path/to/file1',
           }),
         ],
         nextCursor: undefined,
@@ -665,7 +665,7 @@ describe(IntegrityService.name, () => {
         result: { id: ownerId },
       } = await ctx.newUser();
 
-      await ctx.newAsset({ ownerId, originalPath: '/path/to/file1', checksum: Buffer.from('a') });
+      await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1', checksum: Buffer.from('a') });
 
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
@@ -714,9 +714,9 @@ describe(IntegrityService.name, () => {
       await ctx.newAsset({
         ownerId: user.id,
         createdAt: DateTime.now().minus({ days: 1 }).toISO(),
-        originalPath: '/foo/bar',
+        originalPath: 'file:///foo/bar',
       });
-      await ctx.newAsset({ ownerId: user.id, originalPath: '/foo/baz' });
+      await ctx.newAsset({ ownerId: user.id, originalPath: 'file:///foo/baz' });
 
       await ctx
         .get(SystemMetadataRepository)
@@ -751,37 +751,37 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: fixedAssetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/fixed', checksum: correctChecksum });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/fixed', checksum: correctChecksum });
 
       const { id: fixedReportId } = await integrity.create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/fixed',
+        path: 'file:///path/to/fixed',
         assetId: fixedAssetId,
       });
 
       const {
         result: { id: missingAssetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/missing', checksum: Buffer.from('1') });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/missing', checksum: Buffer.from('1') });
 
       const { id: missingReportId } = await integrity.create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/missing',
+        path: 'file:///path/to/missing',
         assetId: missingAssetId,
       });
 
       const {
         result: { id: badAssetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/missing', checksum: Buffer.from('2') });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/missing', checksum: Buffer.from('2') });
 
       const { id: badReportId } = await integrity.create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/bad',
+        path: 'file:///path/to/bad',
         assetId: badAssetId,
       });
 
       const { id: missingAssetReportId } = await integrity.create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/missing-asset',
+        path: 'file:///path/to/missing-asset',
       });
 
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
@@ -797,10 +797,10 @@ describe(IntegrityService.name, () => {
 
       await sut.handleChecksumRefresh({
         items: [
-          { reportId: fixedReportId, path: '/path/to/fixed', checksum: correctChecksum.toString('hex') },
-          { reportId: missingReportId, path: '/path/to/missing', checksum: 'abc123' },
-          { reportId: badReportId, path: '/path/to/bad', checksum: 'wrongchecksum' },
-          { reportId: missingAssetReportId, path: '/path/to/missing-asset', checksum: null },
+          { reportId: fixedReportId, path: 'file:///path/to/fixed', checksum: correctChecksum.toString('hex') },
+          { reportId: missingReportId, path: 'file:///path/to/missing', checksum: 'abc123' },
+          { reportId: badReportId, path: 'file:///path/to/bad', checksum: 'wrongchecksum' },
+          { reportId: missingAssetReportId, path: 'file:///path/to/missing-asset', checksum: null },
         ],
       });
 
@@ -816,7 +816,7 @@ describe(IntegrityService.name, () => {
           expect.objectContaining({
             id: badReportId,
             assetId: badAssetId,
-            path: '/path/to/bad',
+            path: 'file:///path/to/bad',
           }),
         ],
         nextCursor: undefined,
@@ -842,11 +842,11 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
 
       const { id: reportId } = await integrity.create({
         type: IntegrityReport.ChecksumFail,
-        path: '/path/to/file1',
+        path: 'file:///path/to/file1',
         assetId,
       });
 
@@ -855,7 +855,7 @@ describe(IntegrityService.name, () => {
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityDeleteReports,
         data: {
-          reports: [{ id: reportId, assetId, path: '/path/to/file1', fileAssetId: null }],
+          reports: [{ id: reportId, assetId, path: 'file:///path/to/file1', fileAssetId: null }],
         },
       });
     });
@@ -872,29 +872,29 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
 
       const { id: assetReportId } = await integrity.create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/file1',
+        path: 'file:///path/to/file1',
         assetId,
       });
 
       const {
         result: { id: assetId2 },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file2' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file2' });
 
       const fileAssetId = randomUUID();
       await ctx.newAssetFile({
         id: fileAssetId,
         assetId: assetId2,
-        path: '/path/to/file3',
+        path: 'file:///path/to/file3',
         type: AssetFileType.Thumbnail,
       });
 
       const { id: fileAssetReportId } = await integrity.create({
         type: IntegrityReport.MissingFile,
-        path: '/path/to/file3',
+        path: 'file:///path/to/file3',
         fileAssetId,
       });
 
@@ -905,14 +905,14 @@ describe(IntegrityService.name, () => {
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityDeleteReports,
         data: {
-          reports: [{ id: assetReportId, assetId, path: '/path/to/file1', fileAssetId: null }],
+          reports: [{ id: assetReportId, assetId, path: 'file:///path/to/file1', fileAssetId: null }],
         },
       });
 
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityDeleteReports,
         data: {
-          reports: [{ id: fileAssetReportId, assetId: null, path: '/path/to/file3', fileAssetId }],
+          reports: [{ id: fileAssetReportId, assetId: null, path: 'file:///path/to/file3', fileAssetId }],
         },
       });
     });
@@ -925,7 +925,7 @@ describe(IntegrityService.name, () => {
 
       const { id: reportId } = await integrity.create({
         type: IntegrityReport.UntrackedFile,
-        path: '/path/to/untracked',
+        path: 'file:///path/to/untracked',
       });
 
       await sut.handleDeleteAllIntegrityReports({ type: IntegrityReport.UntrackedFile });
@@ -933,7 +933,7 @@ describe(IntegrityService.name, () => {
       expect(job.queue).toHaveBeenCalledWith({
         name: JobName.IntegrityDeleteReports,
         data: {
-          reports: [{ id: reportId, path: '/path/to/untracked', assetId: null, fileAssetId: null }],
+          reports: [{ id: reportId, path: 'file:///path/to/untracked', assetId: null, fileAssetId: null }],
         },
       });
     });
@@ -960,53 +960,53 @@ describe(IntegrityService.name, () => {
 
       const {
         result: { id: assetId1 },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file1' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file1' });
 
       const { id: reportId1 } = await integrity.create({
-        path: '/path/to/file1',
+        path: 'file:///path/to/file1',
         type: IntegrityReport.ChecksumFail,
         assetId: assetId1,
       });
 
       const {
         result: { id: assetId2 },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file2' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file2' });
 
       const { id: reportId2 } = await integrity.create({
-        path: '/path/to/file2',
+        path: 'file:///path/to/file2',
         type: IntegrityReport.MissingFile,
         assetId: assetId2,
       });
 
       const {
         result: { id: assetId3 },
-      } = await ctx.newAsset({ ownerId, originalPath: '/path/to/file3' });
+      } = await ctx.newAsset({ ownerId, originalPath: 'file:///path/to/file3' });
 
       const fileAssetId = randomUUID();
       await ctx.newAssetFile({
         id: fileAssetId,
         assetId: assetId3,
-        path: '/path/to/file4',
+        path: 'file:///path/to/file4',
         type: AssetFileType.Thumbnail,
       });
 
       const { id: reportId3 } = await integrity.create({
-        path: '/path/to/file4',
+        path: 'file:///path/to/file4',
         type: IntegrityReport.MissingFile,
         fileAssetId,
       });
 
       const { id: reportId4 } = await integrity.create({
-        path: '/path/to/untracked',
+        path: 'file:///path/to/untracked',
         type: IntegrityReport.UntrackedFile,
       });
 
       await sut.handleDeleteIntegrityReports({
         reports: [
-          { id: reportId1, assetId: assetId1, fileAssetId: null, path: '/path/to/file1' },
-          { id: reportId2, assetId: assetId2, fileAssetId: null, path: '/path/to/file2' },
-          { id: reportId3, assetId: null, fileAssetId, path: '/path/to/file4' },
-          { id: reportId4, assetId: null, fileAssetId: null, path: '/path/to/untracked' },
+          { id: reportId1, assetId: assetId1, fileAssetId: null, path: 'file:///path/to/file1' },
+          { id: reportId2, assetId: assetId2, fileAssetId: null, path: 'file:///path/to/file2' },
+          { id: reportId3, assetId: null, fileAssetId, path: 'file:///path/to/file4' },
+          { id: reportId4, assetId: null, fileAssetId: null, path: 'file:///path/to/untracked' },
         ],
       });
 

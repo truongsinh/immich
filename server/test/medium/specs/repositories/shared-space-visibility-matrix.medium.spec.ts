@@ -1438,7 +1438,7 @@ describe('matrix: view/folders (getUniqueOriginalPaths)', () => {
       const { asset } = await ctx.newAsset({
         ownerId: owner.id,
         visibility: vis,
-        originalPath: `${basePath}/${subdir}/photo.jpg`,
+        originalPath: `file://${basePath}/${subdir}/photo.jpg`,
         fileCreatedAt: new Date(),
         localDateTime: new Date(),
       });

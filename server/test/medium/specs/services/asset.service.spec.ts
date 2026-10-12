@@ -1,5 +1,6 @@
 import { Kysely } from 'kysely';
 import type { AssetResponseDto } from 'src/dtos/asset-response.dto.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { AssetEditAction } from 'src/dtos/editing.dto.js';
 import { AssetFileType, AssetMetadataKey, AssetStatus, AssetVisibility, JobName, SharedLinkType } from 'src/enum.js';
@@ -325,7 +326,7 @@ describe(AssetService.name, () => {
 
       await ctx.newAssetFile({
         assetId: oldAsset.id,
-        path: '/path/to/my/sidecar.xmp',
+        path: 'file:///path/to/my/sidecar.xmp',
         type: AssetFileType.Sidecar,
       });
 
@@ -338,7 +339,10 @@ describe(AssetService.name, () => {
 
       await sut.copy(auth, { sourceId: oldAsset.id, targetId: newAsset.id });
 
-      expect(storageRepo.copyFile).toHaveBeenCalledWith('/path/to/my/sidecar.xmp', `${newAsset.originalPath}.xmp`);
+      expect(storageRepo.copyFile).toHaveBeenCalledWith(
+        '/path/to/my/sidecar.xmp',
+        `${diskPathOf(newAsset.originalPath)}.xmp`,
+      );
 
       expect(jobRepo.queue).toHaveBeenCalledWith({
         name: JobName.AssetExtractMetadata,
@@ -354,9 +358,9 @@ describe(AssetService.name, () => {
       ctx.getMock(JobRepository).queue.mockResolvedValue();
       const { user } = await ctx.newUser();
       const { asset } = await ctx.newAsset({ ownerId: user.id });
-      const thumbnailPath = '/path/to/thumbnail.jpg';
-      const previewPath = '/path/to/preview.jpg';
-      const sidecarPath = '/path/to/sidecar.xmp';
+      const thumbnailPath = 'file:///path/to/thumbnail.jpg';
+      const previewPath = 'file:///path/to/preview.jpg';
+      const sidecarPath = 'file:///path/to/sidecar.xmp';
       await Promise.all([
         ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Thumbnail, path: thumbnailPath }),
         ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Preview, path: previewPath }),
@@ -437,12 +441,12 @@ describe(AssetService.name, () => {
       ctx.getMock(JobRepository).queue.mockResolvedValue();
       const { user } = await ctx.newUser();
       const { asset } = await ctx.newAsset({ ownerId: user.id, isOffline: true });
-      const thumbnailPath = '/path/to/thumbnail.jpg';
-      const previewPath = '/path/to/preview.jpg';
+      const thumbnailPath = 'file:///path/to/thumbnail.jpg';
+      const previewPath = 'file:///path/to/preview.jpg';
       await Promise.all([
         ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Thumbnail, path: thumbnailPath }),
         ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Preview, path: previewPath }),
-        ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Sidecar, path: `/path/to/sidecar.xmp` }),
+        ctx.newAssetFile({ assetId: asset.id, type: AssetFileType.Sidecar, path: `file:///path/to/sidecar.xmp` }),
       ]);
 
       await sut.handleAssetDeletion({ id: asset.id, deleteOnDisk: true });

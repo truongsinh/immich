@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { isAbsolute } from 'node:path';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { EmailImageAttachment, JobOf } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import { MapAlbumDto } from 'src/dtos/album.dto.js';
 import { mapAsset } from 'src/dtos/asset-response.dto.js';
@@ -477,13 +477,15 @@ export class NotificationService extends BaseService {
     const filePath = albumThumbnailFiles[0].path;
     const filename = `album-thumbnail${getFilenameExtension(filePath)}`;
 
-    // a disk thumbnail is attached by path for the mailer to read; an S3 key has no path to give it
-    if (!isAbsolute(filePath)) {
-      const content = await StorageService.resolveBackendForKey(filePath).readAll(filePath);
+    // a disk thumbnail is attached by path for the mailer to read; an S3 object has no path to give it
+    const diskPath = diskPathOf(filePath);
+    if (!diskPath) {
+      const { backend, key } = StorageService.resolve(filePath);
+      const content = await backend.readAll(key);
       return { filename, cid: 'album-thumbnail', content };
     }
 
-    return { filename, cid: 'album-thumbnail', path: filePath };
+    return { filename, cid: 'album-thumbnail', path: diskPath };
   }
 
   private async sendAlbumLocalNotification(

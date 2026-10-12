@@ -851,7 +851,7 @@ const assetInsert = (asset: Partial<Insertable<AssetTable>> = {}) => {
     checksum: randomBytes(32),
     checksumAlgorithm: ChecksumAlgorithm.sha1File,
     type: AssetType.Image,
-    originalPath: '/path/to/something.jpg',
+    originalPath: 'file:///path/to/something.jpg',
     ownerId: 'not-a-valid-uuid',
     fileCreatedAt: now,
     fileModifiedAt: now,
@@ -964,7 +964,7 @@ const personInsert = (person: Partial<Insertable<PersonTable>> & { ownerId: stri
     isHidden: person.isHidden || false,
     name: person.name || 'Test Name',
     ownerId: person.ownerId || newUuid(),
-    thumbnailPath: person.thumbnailPath || '/path/to/thumbnail.jpg',
+    thumbnailPath: person.thumbnailPath || 'file:///path/to/thumbnail.jpg',
   };
   return {
     ...defaults,

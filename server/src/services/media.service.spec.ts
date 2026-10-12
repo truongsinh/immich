@@ -1,6 +1,7 @@
 import { ShallowDehydrateObject } from 'kysely';
 import { OutputInfo } from 'sharp';
 import type { AudioStreamInfo, JobCounts, RawImageInfo, VideoFormat, VideoStreamInfo } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { Exif } from 'src/database.js';
 import { SystemConfig } from 'src/dtos/config.dto.js';
@@ -52,7 +53,7 @@ describe(MediaService.name, () => {
   describe('persistFile', () => {
     afterEach(() => {
       // vitest.config.mjs sets no restoreMocks and there are no setupFiles, so a
-      // getWriteBackend spy would leak into every later test in this file and
+      // write-target spy would leak into every later test in this file and
       // silently run the disk-mode tests against S3.
       vi.restoreAllMocks();
     });
@@ -61,23 +62,33 @@ describe(MediaService.name, () => {
       const put = vi.fn().mockResolvedValue(void 0);
       const stream = makeStream([Buffer.from('data')]);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+      vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
       mocks.storage.createPlainReadStream.mockReturnValue(stream as any);
 
-      const result = await (sut as any).persistFile('/local/out.jpg', 'thumbs/aa/bb/x.jpg', 'image/jpeg');
+      const result = await (sut as any).persistFile(
+        AssetFileType.Thumbnail,
+        '/local/out.jpg',
+        'thumbs/aa/bb/x.jpg',
+        'image/jpeg',
+      );
 
       expect(mocks.storage.createPlainReadStream).toHaveBeenCalledWith('/local/out.jpg');
       expect(put).toHaveBeenCalledWith('thumbs/aa/bb/x.jpg', stream, { contentType: 'image/jpeg' });
       expect(mocks.storage.unlink).toHaveBeenCalledWith('/local/out.jpg');
-      expect(result).toBe('thumbs/aa/bb/x.jpg');
+      expect(result).toBe('s3://default/thumbs/aa/bb/x.jpg');
     });
 
     it('returns the local path and deletes nothing (disk mode)', async () => {
-      // StorageService.diskBackend is undefined in this spec file, so getWriteBackend()
-      // returns undefined and persistFile takes its disk branch.
-      const result = await (sut as any).persistFile('/local/out.jpg', 'thumbs/aa/bb/x.jpg', 'image/jpeg');
+      // the write targets default to disk when StorageService has not bootstrapped in this spec file
+      const result = await (sut as any).persistFile(
+        AssetFileType.Thumbnail,
+        '/local/out.jpg',
+        'thumbs/aa/bb/x.jpg',
+        'image/jpeg',
+      );
 
-      expect(result).toBe('/local/out.jpg');
+      expect(result).toBe('file:///local/out.jpg');
       expect(mocks.storage.createPlainReadStream).not.toHaveBeenCalled();
       expect(mocks.storage.unlink).not.toHaveBeenCalled();
     });
@@ -364,7 +375,7 @@ describe(MediaService.name, () => {
     });
 
     it('should skip S3 assets with relative paths', async () => {
-      const asset = AssetFactory.from({ originalPath: 'upload/user/ab/cd/file.jpg' })
+      const asset = AssetFactory.from({ originalPath: 's3://default/upload/user/ab/cd/file.jpg' })
         .files([AssetFileType.FullSize, AssetFileType.Preview, AssetFileType.Thumbnail])
         .build();
       mocks.assetJob.getForMigrationJob.mockResolvedValue(asset);
@@ -394,19 +405,19 @@ describe(MediaService.name, () => {
       expect(mocks.move.create).toHaveBeenCalledWith({
         entityId: asset.id,
         pathType: AssetFileType.FullSize,
-        oldPath: asset.files[0].path,
+        oldPath: diskPathOf(asset.files[0].path),
         newPath: `/data/thumbs/${asset.ownerId}/${asset.id.slice(0, 2)}/${asset.id.slice(2, 4)}/${asset.id}_fullsize.jpeg`,
       });
       expect(mocks.move.create).toHaveBeenCalledWith({
         entityId: asset.id,
         pathType: AssetFileType.Preview,
-        oldPath: asset.files[1].path,
+        oldPath: diskPathOf(asset.files[1].path),
         newPath: `/data/thumbs/${asset.ownerId}/${asset.id.slice(0, 2)}/${asset.id.slice(2, 4)}/${asset.id}_preview.jpeg`,
       });
       expect(mocks.move.create).toHaveBeenCalledWith({
         entityId: asset.id,
         pathType: AssetFileType.Thumbnail,
-        oldPath: asset.files[2].path,
+        oldPath: diskPathOf(asset.files[2].path),
         newPath: `/data/thumbs/${asset.ownerId}/${asset.id.slice(0, 2)}/${asset.id.slice(2, 4)}/${asset.id}_thumbnail.webp`,
       });
       expect(mocks.move.create).toHaveBeenCalledTimes(3);
@@ -499,7 +510,7 @@ describe(MediaService.name, () => {
       expect(mocks.storage.mkdirSync).toHaveBeenCalledWith(expect.any(String));
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
         size: 1440,
@@ -565,7 +576,9 @@ describe(MediaService.name, () => {
     });
 
     it('should generate a thumbnail for a video', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue({
         ...getForGenerateThumbnail(asset),
         ...probeStub.videoStream2160p,
@@ -614,7 +627,9 @@ describe(MediaService.name, () => {
     });
 
     it('should tonemap thumbnail for hdr video', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue({
         ...getForGenerateThumbnail(asset),
         ...probeStub.videoStreamHDR,
@@ -663,7 +678,9 @@ describe(MediaService.name, () => {
     });
 
     it('should always generate video thumbnail in one pass', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.systemMetadata.get.mockResolvedValue({
         ffmpeg: { twoPass: true, maxBitrate: '5000k' },
       });
@@ -696,7 +713,9 @@ describe(MediaService.name, () => {
     });
 
     it('should not skip intra frames for MTS file', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue({
         ...getForGenerateThumbnail(asset),
         ...probeStub.videoStreamMTS,
@@ -716,7 +735,9 @@ describe(MediaService.name, () => {
     });
 
     it('should override reserved color metadata', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue({
         ...getForGenerateThumbnail(asset),
         ...probeStub.videoStreamReserved,
@@ -739,7 +760,9 @@ describe(MediaService.name, () => {
     });
 
     it('should use scaling divisible by 2 even when using quick sync', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { accel: TranscodeHardwareAcceleration.Qsv } });
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue({
         ...getForGenerateThumbnail(asset),
@@ -771,7 +794,7 @@ describe(MediaService.name, () => {
 
       expect(mocks.storage.mkdirSync).toHaveBeenCalledWith(expect.any(String));
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.Srgb,
         processInvalidImages: false,
         size: 1440,
@@ -819,7 +842,7 @@ describe(MediaService.name, () => {
 
       expect(mocks.storage.mkdirSync).toHaveBeenCalledWith(expect.any(String));
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.Srgb,
         processInvalidImages: false,
         size: 1440,
@@ -933,7 +956,9 @@ describe(MediaService.name, () => {
     });
 
     it('should never set isProgressive for videos', async () => {
-      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: '/original/path.ext' }).exif().build();
+      const asset = AssetFactory.from({ type: AssetType.Video, originalPath: 'file:///original/path.ext' })
+        .exif()
+        .build();
       mocks.systemMetadata.get.mockResolvedValue({
         image: { preview: { progressive: true }, thumbnail: { progressive: true } },
       });
@@ -993,7 +1018,10 @@ describe(MediaService.name, () => {
     });
 
     it('should decode HEIC thumbnails through the image pipeline', async () => {
-      const asset = AssetFactory.from({ originalFileName: 'IMG_1234.HEIC', originalPath: '/original/IMG_1234.HEIC' })
+      const asset = AssetFactory.from({
+        originalFileName: 'IMG_1234.HEIC',
+        originalPath: 'file:///original/IMG_1234.HEIC',
+      })
         .exif({ fileSizeInByte: 5000, orientation: ExifOrientation.Rotate90CW.toString() })
         .build();
       mocks.assetJob.getForGenerateThumbnailJob.mockResolvedValue(getForGenerateThumbnail(asset));
@@ -1003,7 +1031,7 @@ describe(MediaService.name, () => {
       expect(mocks.media.probe).not.toHaveBeenCalled();
       expect(mocks.media.extractFrame).not.toHaveBeenCalled();
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.Srgb,
         processInvalidImages: false,
         size: 1440,
@@ -1023,7 +1051,7 @@ describe(MediaService.name, () => {
         .mockResolvedValue({ localPath: '/tmp/immich-s3-heic.tmp', cleanup });
       const asset = AssetFactory.from({
         originalFileName: 'IMG_1234.HEIC',
-        originalPath: 'upload/user/12/34/asset.HEIC',
+        originalPath: 's3://default/upload/user/12/34/asset.HEIC',
       })
         .exif({ fileSizeInByte: 5000, orientation: ExifOrientation.Rotate90CW.toString() })
         .build();
@@ -1080,7 +1108,7 @@ describe(MediaService.name, () => {
 
       await sut.handleGenerateThumbnails({ id: asset.id });
 
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
         size: 1440,
@@ -1097,7 +1125,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
         size: 1440,
@@ -1115,7 +1143,7 @@ describe(MediaService.name, () => {
 
       expect(mocks.media.extract).not.toHaveBeenCalled();
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
         size: 1440,
@@ -1134,7 +1162,7 @@ describe(MediaService.name, () => {
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
       expect(mocks.media.decodeImage).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.objectContaining({ processInvalidImages: true }),
       );
 
@@ -1257,7 +1285,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
       });
@@ -1306,7 +1334,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
       });
@@ -1336,7 +1364,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.Srgb,
         processInvalidImages: false,
         size: 1440,
@@ -1368,7 +1396,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.Srgb,
         orientation: undefined,
         processInvalidImages: false,
@@ -1390,7 +1418,11 @@ describe(MediaService.name, () => {
       );
 
       expect(mocks.media.copyTagGroup).toHaveBeenCalledTimes(2);
-      expect(mocks.media.copyTagGroup).toHaveBeenCalledWith('XMP-GPano', asset.originalPath, expect.any(String));
+      expect(mocks.media.copyTagGroup).toHaveBeenCalledWith(
+        'XMP-GPano',
+        diskPathOf(asset.originalPath),
+        expect.any(String),
+      );
     });
 
     it('should respect encoding options when generating full-size preview', async () => {
@@ -1411,7 +1443,7 @@ describe(MediaService.name, () => {
       await sut.handleGenerateThumbnails({ id: asset.id });
 
       expect(mocks.media.decodeImage).toHaveBeenCalledOnce();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(asset.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(asset.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
       });
@@ -1647,7 +1679,7 @@ describe(MediaService.name, () => {
 
       // The encoded video is never a valid ffmpeg input: on S3 its path is a relative key.
       // The original is both readable and higher quality.
-      expect(mocks.media.trim).toHaveBeenCalledWith(asset.originalPath, expect.any(String), 5, 20);
+      expect(mocks.media.trim).toHaveBeenCalledWith(diskPathOf(asset.originalPath), expect.any(String), 5, 20);
     });
 
     it('should update asset duration after trimming', async () => {
@@ -1875,7 +1907,7 @@ describe(MediaService.name, () => {
     describe('trim video persistence (S3)', () => {
       afterEach(() => {
         // vitest.config.mjs sets no restoreMocks and there are no setupFiles, so a
-        // getWriteBackend spy would leak into every later test in this file and
+        // write-target spy would leak into every later test in this file and
         // silently run the disk-mode tests against S3.
         vi.restoreAllMocks();
       });
@@ -1883,7 +1915,8 @@ describe(MediaService.name, () => {
       it('uploads the trimmed video under the _edited key and stores that key (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -1904,7 +1937,11 @@ describe(MediaService.name, () => {
         expect(put).toHaveBeenCalledWith(editedKey, expect.anything(), { contentType: 'video/mp4' });
         expect(mocks.asset.upsertFiles).toHaveBeenCalledWith(
           expect.arrayContaining([
-            expect.objectContaining({ type: AssetFileType.EncodedVideo, isEdited: true, path: editedKey }),
+            expect.objectContaining({
+              type: AssetFileType.EncodedVideo,
+              isEdited: true,
+              path: `s3://default/${editedKey}`,
+            }),
           ]),
         );
       });
@@ -1914,7 +1951,8 @@ describe(MediaService.name, () => {
         // report the trimmed length while getForVideo still serves the full-length original.
         const put = vi.fn().mockRejectedValue(new Error('s3 down'));
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -1937,7 +1975,8 @@ describe(MediaService.name, () => {
       it('never uploads the trimmed video over the transcoded original (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -1962,7 +2001,8 @@ describe(MediaService.name, () => {
       it('uploads the trimmed video only after the thumbnail frame is extracted (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -1988,7 +2028,8 @@ describe(MediaService.name, () => {
       it('does not delete the edited video it just re-uploaded when re-trimming (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -2002,7 +2043,7 @@ describe(MediaService.name, () => {
             {
               type: AssetFileType.EncodedVideo,
               isEdited: true,
-              path: editedKey,
+              path: `s3://default/${editedKey}`,
               isProgressive: false,
               isTransparent: false,
             },
@@ -2023,13 +2064,14 @@ describe(MediaService.name, () => {
         const deletedFiles = mocks.job.queue.mock.calls
           .filter(([job]) => job.name === JobName.FileDelete)
           .flatMap(([job]) => (job as any).data.files as string[]);
-        expect(deletedFiles).not.toContain(editedKey);
+        expect(deletedFiles).not.toContain(`s3://default/${editedKey}`);
       });
 
       it('uploads the trim thumbnails under _edited keys and stores those keys (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('data')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -2060,7 +2102,7 @@ describe(MediaService.name, () => {
         const upsertedThumbs = upserted.filter((file) => file.type !== AssetFileType.EncodedVideo);
         expect(upsertedThumbs.length).toBeGreaterThanOrEqual(2);
         for (const file of upsertedThumbs) {
-          expect(file.path.startsWith('/')).toBe(false);
+          expect(file.path.startsWith('s3://default/')).toBe(true);
           expect(file.path).toContain('_edited');
         }
       });
@@ -2068,7 +2110,8 @@ describe(MediaService.name, () => {
       it('never overwrites the non-edited preview or thumbnail objects (S3)', async () => {
         const put = vi.fn().mockResolvedValue(void 0);
         const { StorageService } = await import('src/services/storage.service.js');
-        vi.spyOn(StorageService, 'getWriteBackend').mockReturnValue({ put } as any);
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put }]]) as any);
         mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('data')]) as any);
 
         const asset = AssetFactory.from({ type: AssetType.Video })
@@ -2105,8 +2148,8 @@ describe(MediaService.name, () => {
       });
 
       it('keeps disk-mode trim paths absolute and uploads nothing (regression guard)', async () => {
-        // No getWriteBackend spy: StorageService.diskBackend is undefined in this spec file,
-        // so persistFile takes its disk branch. Nothing here may become a relative key.
+        // No write-target spy: the write targets default to disk in this spec file,
+        // so persistFile takes its disk branch. Nothing here may become an S3 path.
         const asset = AssetFactory.from({ type: AssetType.Video })
           .exif()
           .edit({ action: AssetEditAction.Trim, parameters: { startTime: 5, endTime: 25 } as any })
@@ -2124,7 +2167,7 @@ describe(MediaService.name, () => {
         const upserted = mocks.asset.upsertFiles.mock.calls.flatMap(([files]) => files);
         expect(upserted.length).toBeGreaterThanOrEqual(3); // edited video + preview + thumbnail
         for (const file of upserted) {
-          expect(file.path.startsWith('/')).toBe(true);
+          expect(file.path.startsWith('file:///')).toBe(true);
         }
         expect(mocks.storage.createPlainReadStream).not.toHaveBeenCalled();
       });
@@ -2200,11 +2243,14 @@ describe(MediaService.name, () => {
         personGroupId: person.personGroupId,
       });
       expect(mocks.storage.mkdirSync).toHaveBeenCalledWith(expect.any(String));
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.newThumbnailMiddle.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.newThumbnailMiddle.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalledWith(
         { data, info },
         {
@@ -2301,11 +2347,14 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.newThumbnailStart.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.newThumbnailStart.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalledWith(
         { data, info },
         {
@@ -2345,11 +2394,14 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.newThumbnailEnd.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.newThumbnailEnd.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalledWith(
         { data, info },
         {
@@ -2389,11 +2441,14 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.negativeCoordinate.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.negativeCoordinate.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalledWith(
         { data, info },
         {
@@ -2433,11 +2488,14 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.overflowingCoordinate.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.overflowingCoordinate.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalledWith(
         { data, info },
         {
@@ -2481,7 +2539,9 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.extract).toHaveBeenCalledWith(personThumbnailStub.rawEmbeddedThumbnail.originalPath);
+      expect(mocks.media.extract).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.rawEmbeddedThumbnail.originalPath),
+      );
       expect(mocks.media.decodeImage).toHaveBeenCalledWith(extracted, {
         colorspace: Colorspace.P3,
         orientation: ExifOrientation.Horizontal,
@@ -2533,7 +2593,7 @@ describe(MediaService.name, () => {
       const person = PersonFactory.create();
       const data = {
         ...personThumbnailStub.newThumbnailMiddle,
-        originalPath: '/original/IMG_1234.HEIC',
+        originalPath: 'file:///original/IMG_1234.HEIC',
         previewPath: null,
       };
 
@@ -2550,7 +2610,7 @@ describe(MediaService.name, () => {
 
       expect(mocks.media.probe).not.toHaveBeenCalled();
       expect(mocks.media.extractFrame).not.toHaveBeenCalled();
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(data.originalPath, {
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(diskPathOf(data.originalPath), {
         colorspace: Colorspace.P3,
         processInvalidImages: false,
       });
@@ -2570,7 +2630,7 @@ describe(MediaService.name, () => {
       const person = PersonFactory.create();
       const data = {
         ...personThumbnailStub.newThumbnailMiddle,
-        originalPath: 'upload/user/12/34/asset.HEIC',
+        originalPath: 's3://default/upload/user/12/34/asset.HEIC',
         previewPath: null,
       };
 
@@ -2609,12 +2669,17 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.extract).toHaveBeenCalledWith(personThumbnailStub.rawEmbeddedThumbnail.originalPath);
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.rawEmbeddedThumbnail.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.extract).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.rawEmbeddedThumbnail.originalPath),
+      );
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.rawEmbeddedThumbnail.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalled();
     });
 
@@ -2635,12 +2700,17 @@ describe(MediaService.name, () => {
         sut.handleGeneratePersonThumbnail({ ownerId: person.ownerId, personGroupId: person.personGroupId }),
       ).resolves.toBe(JobStatus.Success);
 
-      expect(mocks.media.extract).toHaveBeenCalledWith(personThumbnailStub.rawEmbeddedThumbnail.originalPath);
-      expect(mocks.media.decodeImage).toHaveBeenCalledWith(personThumbnailStub.rawEmbeddedThumbnail.originalPath, {
-        colorspace: Colorspace.P3,
-        orientation: undefined,
-        processInvalidImages: false,
-      });
+      expect(mocks.media.extract).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.rawEmbeddedThumbnail.originalPath),
+      );
+      expect(mocks.media.decodeImage).toHaveBeenCalledWith(
+        diskPathOf(personThumbnailStub.rawEmbeddedThumbnail.originalPath),
+        {
+          colorspace: Colorspace.P3,
+          orientation: undefined,
+          processInvalidImages: false,
+        },
+      );
       expect(mocks.media.generateThumbnail).toHaveBeenCalled();
     });
   });
@@ -2700,7 +2770,7 @@ describe(MediaService.name, () => {
     };
     beforeEach(() => {
       asset = {
-        ...AssetFactory.create({ id: 'video-id', type: AssetType.Video, originalPath: '/original/path.ext' }),
+        ...AssetFactory.create({ id: 'video-id', type: AssetType.Video, originalPath: 'file:///original/path.ext' }),
         videoStream: probeStub.videoStreamH264.videoStream,
         audioStream: null,
         format: probeStub.videoStreamH264.format,
@@ -4610,7 +4680,7 @@ describe(MediaService.name, () => {
       await sut.handleVideoConversion({ id: asset.id });
 
       expect(mocks.media.transcode).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.stringContaining('video-id.mp4'),
         expect.objectContaining({
           inputOptions: expect.any(Array),
@@ -5195,7 +5265,7 @@ describe(MediaService.name, () => {
       const asset = AssetFactory.create({
         id: 'video-id',
         type: AssetType.Video,
-        originalPath: '/original/path.ext',
+        originalPath: 'file:///original/path.ext',
       });
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...movMetadata });
       sut.videoInterfaces = { dri: ['renderD128'], mali: true };
@@ -5227,7 +5297,7 @@ describe(MediaService.name, () => {
       const asset = AssetFactory.create({
         id: 'video-id',
         type: AssetType.Video,
-        originalPath: '/original/path.ext',
+        originalPath: 'file:///original/path.ext',
       });
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.multipleVideoStreams });
       sut.videoInterfaces = { dri: ['renderD128'], mali: true };
@@ -5288,7 +5358,7 @@ describe(MediaService.name, () => {
       const asset = AssetFactory.create({
         id: 'video-id',
         type: AssetType.Video,
-        originalPath: '/original/path.ext',
+        originalPath: 'file:///original/path.ext',
       });
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.multipleVideoStreams });
       sut.videoInterfaces = { dri: ['renderD128'], mali: true };

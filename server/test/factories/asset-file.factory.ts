@@ -23,7 +23,7 @@ export class AssetFileFactory {
       createdAt: newDate(),
       updatedAt: newDate(),
       type: AssetFileType.Thumbnail,
-      path: `/data/12/34/thumbs/${id.slice(0, 2)}/${id.slice(2, 4)}/${id}${isEdited ? '_edited' : ''}.jpg`,
+      path: `file:///data/12/34/thumbs/${id.slice(0, 2)}/${id.slice(2, 4)}/${id}${isEdited ? '_edited' : ''}.jpg`,
       updateId: newUuidV7(),
       isProgressive: false,
       isTransparent: false,

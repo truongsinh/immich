@@ -19,18 +19,18 @@ export class StorageMigrationController {
   @Authenticated({ permission: Permission.JobRead, admin: true })
   @Endpoint({
     summary: 'Get storage migration estimate',
-    description: 'Estimate the number of files and approximate size that would be migrated for the given direction.',
+    description: 'Estimate the number of files and approximate size that would be migrated to the given target.',
     history: new HistoryBuilder().added('v2.5.0').alpha('v2.5.0'),
   })
-  getEstimate(@Query() { direction }: StorageMigrationEstimateQueryDto) {
-    return this.service.getEstimate(direction);
+  getEstimate(@Query() { target }: StorageMigrationEstimateQueryDto) {
+    return this.service.getEstimate(target);
   }
 
   @Post('start')
   @Authenticated({ permission: Permission.JobCreate, admin: true })
   @Endpoint({
     summary: 'Start storage migration',
-    description: 'Start a storage backend migration job to move files between disk and S3 storage.',
+    description: 'Start a storage backend migration job to move files to disk or to an S3 alias.',
     history: new HistoryBuilder().added('v2.5.0').alpha('v2.5.0'),
   })
   start(@Body() dto: StorageMigrationStartDto) {

@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import AsyncLock from 'async-lock';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import type {
   AudioStreamInfo,
   DecodeToBufferOptions,
@@ -13,7 +12,7 @@ import type {
   VideoInterfaces,
   VideoStreamInfo,
 } from 'src/types.js';
-import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
+import { diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { FACE_THUMBNAIL_SIZE } from 'src/constants.js';
 import { ImagePathOptions, StorageCore, ThumbnailPathEntity } from 'src/cores/storage.core.js';
 import { AssetFile } from 'src/database.js';
@@ -30,6 +29,8 @@ import {
   ImmichWorker,
   JobName,
   JobStatus,
+  PathType,
+  PersonPathType,
   QueueName,
   RawExtractedFormat,
   StorageFolder,
@@ -76,23 +77,28 @@ export class MediaService extends BaseService {
   }
 
   /**
-   * After generating a file locally, uploads it to S3 if the write backend is S3.
-   * Returns the key to store in the DB.
+   * Hands a locally generated file to the write target for its kind and returns the stored path.
+   * A disk target keeps the file where it was generated; an S3 target uploads it under `relativeKey`.
    */
-  private async persistFile(localPath: string, relativeKey: string, contentType?: string): Promise<string> {
-    const writeBackend = StorageService.getWriteBackend();
-    if (!writeBackend || writeBackend instanceof DiskStorageBackend) {
-      // Disk mode: the file was already written to the final path
-      return localPath;
+  private async persistFile(
+    pathType: PathType,
+    localPath: string,
+    relativeKey: string,
+    contentType?: string,
+  ): Promise<string> {
+    const target = StorageService.getWriteTarget(pathType);
+    if (target.type === 'disk') {
+      return toStorageUri(target, localPath);
     }
-    // S3 mode: upload the locally-generated file
+
+    const storedPath = toStorageUri(target, relativeKey);
+    const { backend } = StorageService.resolve(storedPath);
     const stream = this.storageRepository.createPlainReadStream(localPath);
-    await writeBackend.put(relativeKey, stream, { contentType });
-    // Clean up local temp file
+    await backend.put(relativeKey, stream, { contentType });
     await this.storageRepository.unlink(localPath).catch(() => {
       /* ignore */
     });
-    return relativeKey;
+    return storedPath;
   }
 
   /**
@@ -107,7 +113,7 @@ export class MediaService extends BaseService {
         format: file.path.split('.').pop() as ImageFormat,
         isEdited: file.isEdited,
       });
-      file.path = await this.persistFile(file.path, relativeKey, mimeTypes.lookup(file.path));
+      file.path = await this.persistFile(file.type, file.path, relativeKey, mimeTypes.lookup(file.path));
     }
   }
 
@@ -193,8 +199,8 @@ export class MediaService extends BaseService {
       return JobStatus.Failed;
     }
 
-    if (!asset.originalPath || !isAbsolute(asset.originalPath)) {
-      // S3 assets live under relative keys and are managed by the S3 backend, not fs.rename.
+    if (!asset.originalPath || !diskPathOf(asset.originalPath)) {
+      // files on an S3 alias are managed by its backend, not fs.rename
       this.logger.debug(`Skipping asset file migration for S3 asset ${id}`);
       return JobStatus.Skipped;
     }
@@ -361,6 +367,7 @@ export class MediaService extends BaseService {
       // persistFile unlinks the local file after uploading, so this must come AFTER
       // probe() and extractFrame() have read outputPath.
       const editedVideoPath = await this.persistFile(
+        AssetFileType.EncodedVideo,
         outputPath,
         StorageCore.getRelativeEditedEncodedVideoPath(asset),
         'video/mp4',
@@ -694,7 +701,7 @@ export class MediaService extends BaseService {
 
       // Persist person thumbnail to S3 if needed
       const relativeKey = StorageCore.getRelativePersonThumbnailPath({ ownerId, personGroupId });
-      const finalPath = await this.persistFile(thumbnailPath, relativeKey, 'image/jpeg');
+      const finalPath = await this.persistFile(PersonPathType.Face, thumbnailPath, relativeKey, 'image/jpeg');
 
       await this.personRepository.update({ ownerId, personGroupId, thumbnailPath: finalPath });
 
@@ -893,7 +900,7 @@ export class MediaService extends BaseService {
 
       // Persist encoded video to S3 if needed
       const relativeKey = StorageCore.getRelativeEncodedVideoPath(asset);
-      const finalPath = await this.persistFile(output, relativeKey, 'video/mp4');
+      const finalPath = await this.persistFile(AssetFileType.EncodedVideo, output, relativeKey, 'video/mp4');
 
       await this.assetRepository.upsertFile({
         assetId: asset.id,

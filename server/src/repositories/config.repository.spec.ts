@@ -48,10 +48,20 @@ const resetEnv = () => {
     'IMMICH_S3_SECRET_ACCESS_KEY',
     'IMMICH_S3_PRESIGNED_URL_EXPIRY',
     'IMMICH_S3_SERVE_MODE',
+    'IMMICH_STORAGE_ALIASES',
+    'IMMICH_STORAGE_WRITE_ORIGINALS',
+    'IMMICH_STORAGE_WRITE_DERIVATIVES',
   ]) {
     delete process.env[env];
   }
+  for (const env of Object.keys(process.env)) {
+    if (/^IMMICH_S3_[A-Z0-9_]+_[A-Z_]+$/.test(env)) {
+      delete process.env[env];
+    }
+  }
 };
+
+const setEnv = (values: Record<string, string>) => Object.assign(process.env, values);
 
 const sentinelConfig = {
   sentinels: [
@@ -392,6 +402,82 @@ describe('getEnv', () => {
         presignedUrlExpiry: 3600,
         serveMode: 'redirect',
       });
+    });
+
+    it('gives each alias its own endpoint, bucket, credentials and serve mode', () => {
+      setEnv({
+        IMMICH_STORAGE_ALIASES: 'originals-eu,previews-home',
+        IMMICH_S3_ORIGINALS_EU_ENDPOINT: 'https://s3.eu.example',
+        IMMICH_S3_ORIGINALS_EU_BUCKET: 'originals',
+        IMMICH_S3_ORIGINALS_EU_REGION: 'eu-central-1',
+        IMMICH_S3_ORIGINALS_EU_ACCESS_KEY_ID: 'eu-key',
+        IMMICH_S3_ORIGINALS_EU_SECRET_ACCESS_KEY: 'eu-secret',
+        IMMICH_S3_ORIGINALS_EU_SERVE_MODE: 'redirect',
+        IMMICH_S3_ORIGINALS_EU_PRESIGNED_URL_EXPIRY: '600',
+        IMMICH_S3_PREVIEWS_HOME_ENDPOINT: 'https://minio.home:9000',
+        IMMICH_S3_PREVIEWS_HOME_BUCKET: 'previews',
+        IMMICH_S3_PREVIEWS_HOME_ACCESS_KEY_ID: 'home-key',
+        IMMICH_S3_PREVIEWS_HOME_SECRET_ACCESS_KEY: 'home-secret',
+        IMMICH_S3_PREVIEWS_HOME_SERVE_MODE: 'proxy',
+        IMMICH_STORAGE_WRITE_ORIGINALS: 's3://originals-eu',
+        IMMICH_STORAGE_WRITE_DERIVATIVES: 's3://previews-home',
+      });
+
+      const { storage } = getEnv();
+
+      expect(storage.aliases).toEqual({
+        'originals-eu': {
+          endpoint: 'https://s3.eu.example',
+          bucket: 'originals',
+          region: 'eu-central-1',
+          accessKeyId: 'eu-key',
+          secretAccessKey: 'eu-secret',
+          serveMode: 'redirect',
+          presignedUrlExpiry: 600,
+        },
+        'previews-home': {
+          endpoint: 'https://minio.home:9000',
+          bucket: 'previews',
+          region: 'us-east-1',
+          accessKeyId: 'home-key',
+          secretAccessKey: 'home-secret',
+          serveMode: 'proxy',
+          presignedUrlExpiry: 3600,
+        },
+      });
+      expect(storage.writeTargets).toEqual({
+        originals: { type: 's3', alias: 'originals-eu' },
+        derivatives: { type: 's3', alias: 'previews-home' },
+      });
+    });
+
+    it.each([
+      { backend: 's3', target: { type: 's3', alias: 'default' } },
+      { backend: 'disk', target: { type: 'disk' } },
+      { backend: undefined, target: { type: 'disk' } },
+    ])(
+      'turns the legacy settings into alias default and writes everything to $target with backend $backend',
+      ({ backend, target }) => {
+        setEnv({ IMMICH_S3_BUCKET: 'legacy-bucket', IMMICH_S3_ENDPOINT: 'http://minio:9000' });
+        if (backend) {
+          setEnv({ IMMICH_STORAGE_BACKEND: backend });
+        }
+
+        const { storage } = getEnv();
+
+        expect(storage.aliases.default).toMatchObject({ bucket: 'legacy-bucket', endpoint: 'http://minio:9000' });
+        expect(storage.writeTargets).toEqual({ originals: target, derivatives: target });
+      },
+    );
+
+    it.each([
+      { variable: 'IMMICH_STORAGE_WRITE_ORIGINALS', value: 's3://archive-us' },
+      { variable: 'IMMICH_STORAGE_WRITE_DERIVATIVES', value: 's3://archive-us' },
+      { variable: 'IMMICH_STORAGE_BACKEND', value: 's3' },
+    ])('stops startup when $variable=$value names an unconfigured alias', ({ variable, value }) => {
+      setEnv({ IMMICH_STORAGE_ALIASES: 'originals-eu', IMMICH_S3_ORIGINALS_EU_BUCKET: 'originals', [variable]: value });
+
+      expect(() => getEnv()).toThrow(/is not configured/);
     });
   });
 });

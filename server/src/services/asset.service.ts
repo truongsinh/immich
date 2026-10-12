@@ -1,13 +1,13 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { chunk, isUndefined, omitBy } from 'lodash-es';
 import { DateTime, Duration } from 'luxon';
-import { isAbsolute } from 'node:path';
 import type { ShallowDehydrateObject } from 'kysely';
 import type { AssetFace, AssetFile } from 'src/database.js';
 import type { AuthDto } from 'src/dtos/auth.dto.js';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { LinkedSpacePerson } from 'src/repositories/shared-space.repository.js';
 import type { JobItem, JobOf } from 'src/types.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import { AssetResponseDto, SanitizedAssetResponseDto, mapAsset } from 'src/dtos/asset-response.dto.js';
@@ -49,7 +49,6 @@ import {
   SharedSpaceActivityType,
 } from 'src/enum.js';
 import { BaseService } from 'src/services/base.service.js';
-import { StorageService } from 'src/services/storage.service.js';
 import { requireElevatedPermission } from 'src/utils/access.js';
 import {
   getAssetFiles,
@@ -678,13 +677,14 @@ export class AssetService extends BaseService {
 
     const { localPath, cleanup } = await this.ensureLocalFile(sourceFile.path);
     try {
-      if (isAbsolute(targetSidecarPath)) {
-        this.storageCore.ensureFolders(targetSidecarPath);
-        await this.storageRepository.copyFile(localPath, targetSidecarPath);
+      const diskPath = diskPathOf(targetSidecarPath);
+      if (diskPath) {
+        this.storageCore.ensureFolders(diskPath);
+        await this.storageRepository.copyFile(localPath, diskPath);
       } else {
-        const backend = StorageService.resolveBackendForKey(targetSidecarPath);
+        const { backend, key } = await this.resolveStored(targetSidecarPath);
         const stream = this.storageRepository.createPlainReadStream(localPath);
-        await backend.put(targetSidecarPath, stream, { contentType: 'application/xml' });
+        await backend.put(key, stream, { contentType: 'application/xml' });
       }
     } finally {
       await cleanup();
@@ -1086,9 +1086,9 @@ export class AssetService extends BaseService {
         throw new BadRequestException('Trimming live photos is not supported');
       }
 
-      // Block external-library videos: absolute paths outside the media location.
-      // S3-backed originals are relative keys, resolved through the storage backend.
-      if (isAbsolute(asset.originalPath) && !StorageCore.isImmichPath(asset.originalPath)) {
+      // Block external-library videos: disk files outside the media location.
+      const diskPath = diskPathOf(asset.originalPath);
+      if (diskPath && !StorageCore.isImmichPath(diskPath)) {
         throw new BadRequestException('Video trimming is not available for external library videos');
       }
 

@@ -6,6 +6,7 @@ import path, { isAbsolute, parse } from 'node:path';
 import picomatch from 'picomatch';
 import type { ArgOf } from 'src/repositories/event.repository.js';
 import type { JobOf } from 'src/types.js';
+import { DISK, diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { JOBS_LIBRARY_PAGINATION_SIZE } from 'src/constants.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
@@ -423,7 +424,7 @@ export class LibraryService extends BaseService {
       libraryId,
       checksum: this.cryptoRepository.hashSha1(`path:${assetPath}`),
       checksumAlgorithm: ChecksumAlgorithm.sha1Path,
-      originalPath: assetPath,
+      originalPath: toStorageUri(DISK, assetPath),
 
       fileCreatedAt: stat.mtime,
       fileModifiedAt: stat.mtime,
@@ -502,8 +503,9 @@ export class LibraryService extends BaseService {
 
     this.logger.debug(`Checking batch of ${assets.length} existing asset(s) in library ${job.libraryId}`);
 
+    const diskPaths = assets.map((asset) => diskPathOf(asset.originalPath));
     const stats = await Promise.all(
-      assets.map((asset) => this.storageRepository.stat(asset.originalPath).catch(() => null)),
+      diskPaths.map(async (diskPath) => (diskPath ? this.storageRepository.stat(diskPath).catch(() => null) : null)),
     );
 
     for (let i = 0; i < assets.length; i++) {
@@ -527,7 +529,8 @@ export class LibraryService extends BaseService {
           break;
         }
         case AssetSyncResult.CHECK_OFFLINE: {
-          const isInImportPath = job.importPaths.some((path) => asset.originalPath.startsWith(path));
+          const diskPath = diskPaths[i]!;
+          const isInImportPath = job.importPaths.some((path) => diskPath.startsWith(path));
 
           if (!isInImportPath) {
             this.logger.verbose(
@@ -537,7 +540,7 @@ export class LibraryService extends BaseService {
           }
 
           const isExcluded = job.exclusionPatterns.some((pattern) =>
-            picomatch.isMatch(asset.originalPath, pattern, { nocase: true }),
+            picomatch.isMatch(diskPath, pattern, { nocase: true }),
           );
 
           if (!isExcluded) {
@@ -671,7 +674,11 @@ export class LibraryService extends BaseService {
 
     for await (const pathBatch of pathsOnDisk) {
       crawlCount += pathBatch.length;
-      const paths = await this.assetRepository.filterNewExternalAssetPaths(library.id, pathBatch);
+      const newAssetPaths = await this.assetRepository.filterNewExternalAssetPaths(
+        library.id,
+        pathBatch.map((path) => toStorageUri(DISK, path)),
+      );
+      const paths = newAssetPaths.map((path) => diskPathOf(path)!);
 
       if (paths.length > 0) {
         importCount += paths.length;
@@ -705,7 +712,10 @@ export class LibraryService extends BaseService {
     // This is only for handling file unlink events via the file watcher
     this.logger.verbose(`Deleting asset(s) ${job.paths} from library ${job.libraryId}`);
     for (const assetPath of job.paths) {
-      const asset = await this.assetRepository.getByLibraryIdAndOriginalPath(job.libraryId, assetPath);
+      const asset = await this.assetRepository.getByLibraryIdAndOriginalPath(
+        job.libraryId,
+        toStorageUri(DISK, assetPath),
+      );
       if (asset) {
         await this.assetRepository.remove(asset);
       }

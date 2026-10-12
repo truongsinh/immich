@@ -7,6 +7,7 @@ import {
 import { Readable } from 'node:stream';
 import type { UploadBody } from 'src/types.js';
 import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { AssetFile } from 'src/database.js';
 import { AssetMediaStatus, AssetRejectReason, AssetUploadAction } from 'src/dtos/asset-media-response.dto.js';
 import { AssetMediaCreateDto, AssetMediaSize, UploadFieldName } from 'src/dtos/asset-media.dto.js';
@@ -350,7 +351,7 @@ describe(AssetMediaService.name, () => {
       expect(mocks.asset.remove).not.toHaveBeenCalled();
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: [file.originalPath, undefined] },
+        data: { files: [`file://${file.originalPath}`, undefined] },
       });
       expect(mocks.event.emit).not.toHaveBeenCalled();
       expect(mocks.user.updateUsage).not.toHaveBeenCalledWith(authStub.user1.user.id, file.size);
@@ -432,7 +433,7 @@ describe(AssetMediaService.name, () => {
       expect(mocks.asset.remove).toHaveBeenCalledWith({ id: assetEntity.id });
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: [file.originalPath, undefined] },
+        data: { files: [`file://${file.originalPath}`, undefined] },
       });
       expect(mocks.user.updateUsage).not.toHaveBeenCalled();
     });
@@ -497,7 +498,7 @@ describe(AssetMediaService.name, () => {
       expect(mocks.asset.remove).toHaveBeenCalledWith({ id: assetEntity.id });
       expect(mocks.job.queue).not.toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: [file.originalPath, undefined] },
+        data: { files: [`file://${file.originalPath}`, undefined] },
       });
       expect(mocks.user.updateUsage).not.toHaveBeenCalled();
     });
@@ -528,13 +529,13 @@ describe(AssetMediaService.name, () => {
 
       expect(mocks.asset.upsertFile).toHaveBeenCalledWith({
         assetId: assetEntity.id,
-        path: sidecarFile.originalPath,
+        path: `file://${sidecarFile.originalPath}`,
         type: AssetFileType.Sidecar,
       });
       expect(mocks.asset.remove).toHaveBeenCalledWith({ id: assetEntity.id });
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: [file.originalPath, sidecarFile.originalPath] },
+        data: { files: [`file://${file.originalPath}`, `file://${sidecarFile.originalPath}`] },
       });
       expect(mocks.user.updateUsage).not.toHaveBeenCalled();
     });
@@ -554,11 +555,8 @@ describe(AssetMediaService.name, () => {
         put: vi.fn().mockResolvedValue(void 0),
         delete: vi.fn().mockResolvedValue(void 0),
       };
-      const previousS3Backend = (StorageService as any).s3Backend;
-      const previousWriteBackendType = (StorageService as any).writeBackendType;
-
-      (StorageService as any).s3Backend = s3Backend;
-      (StorageService as any).writeBackendType = 's3';
+      vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
       mocks.asset.create.mockResolvedValue(assetEntity);
       mocks.event.emit.mockRejectedValue(error);
 
@@ -568,13 +566,15 @@ describe(AssetMediaService.name, () => {
         expect(s3Backend.put).toHaveBeenCalledWith(expectedKey, expect.anything(), {
           contentType: 'application/octet-stream',
         });
-        expect(mocks.asset.update).toHaveBeenCalledWith({ id: assetEntity.id, originalPath: expectedKey });
+        expect(mocks.asset.update).toHaveBeenCalledWith({
+          id: assetEntity.id,
+          originalPath: `s3://default/${expectedKey}`,
+        });
         expect(mocks.asset.remove).toHaveBeenCalledWith({ id: assetEntity.id });
         expect(s3Backend.delete).toHaveBeenCalledWith(expectedKey);
         expect(mocks.user.updateUsage).not.toHaveBeenCalled();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
-        (StorageService as any).writeBackendType = previousWriteBackendType;
+        vi.restoreAllMocks();
       }
     });
 
@@ -594,11 +594,8 @@ describe(AssetMediaService.name, () => {
         put: vi.fn().mockResolvedValue(void 0),
         delete: vi.fn().mockRejectedValue(deleteError),
       };
-      const previousS3Backend = (StorageService as any).s3Backend;
-      const previousWriteBackendType = (StorageService as any).writeBackendType;
-
-      (StorageService as any).s3Backend = s3Backend;
-      (StorageService as any).writeBackendType = 's3';
+      vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
       mocks.asset.create.mockResolvedValue(assetEntity);
       mocks.event.emit.mockRejectedValue(error);
 
@@ -609,8 +606,7 @@ describe(AssetMediaService.name, () => {
         expect(s3Backend.delete).toHaveBeenCalledWith(expectedKey);
         expect(mocks.user.updateUsage).not.toHaveBeenCalled();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
-        (StorageService as any).writeBackendType = previousWriteBackendType;
+        vi.restoreAllMocks();
       }
     });
 
@@ -638,11 +634,8 @@ describe(AssetMediaService.name, () => {
         put: vi.fn().mockResolvedValue(void 0),
         delete: vi.fn().mockResolvedValue(void 0),
       };
-      const previousS3Backend = (StorageService as any).s3Backend;
-      const previousWriteBackendType = (StorageService as any).writeBackendType;
-
-      (StorageService as any).s3Backend = s3Backend;
-      (StorageService as any).writeBackendType = 's3';
+      vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
       mocks.asset.create.mockResolvedValue(assetEntity);
       mocks.asset.upsertFile.mockResolvedValueOnce(void 0).mockRejectedValueOnce(error);
 
@@ -658,8 +651,7 @@ describe(AssetMediaService.name, () => {
         expect(s3Backend.delete).toHaveBeenCalledWith(expectedSidecarKey);
         expect(mocks.user.updateUsage).not.toHaveBeenCalled();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
-        (StorageService as any).writeBackendType = previousWriteBackendType;
+        vi.restoreAllMocks();
       }
     });
 
@@ -678,11 +670,8 @@ describe(AssetMediaService.name, () => {
         put: vi.fn().mockResolvedValue(void 0),
         delete: vi.fn().mockResolvedValue(void 0),
       };
-      const previousS3Backend = (StorageService as any).s3Backend;
-      const previousWriteBackendType = (StorageService as any).writeBackendType;
-
-      (StorageService as any).s3Backend = s3Backend;
-      (StorageService as any).writeBackendType = 's3';
+      vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
       mocks.asset.create.mockResolvedValue(assetEntity);
       mocks.job.queue.mockRejectedValueOnce(error);
 
@@ -693,8 +682,7 @@ describe(AssetMediaService.name, () => {
         expect(mocks.asset.remove).toHaveBeenCalledWith({ id: assetEntity.id });
         expect(mocks.user.updateUsage).not.toHaveBeenCalled();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
-        (StorageService as any).writeBackendType = previousWriteBackendType;
+        vi.restoreAllMocks();
       }
     });
 
@@ -720,7 +708,7 @@ describe(AssetMediaService.name, () => {
 
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: ['fake_path/asset_1.jpeg', undefined] },
+        data: { files: ['file://fake_path/asset_1.jpeg', undefined] },
       });
       expect(mocks.user.updateUsage).not.toHaveBeenCalled();
     });
@@ -745,7 +733,7 @@ describe(AssetMediaService.name, () => {
 
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: ['fake_path/asset_1.jpeg', undefined] },
+        data: { files: ['file://fake_path/asset_1.jpeg', undefined] },
       });
       expect(mocks.user.updateUsage).not.toHaveBeenCalled();
     });
@@ -828,7 +816,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(authStub.admin, asset.id, {})).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.originalPath,
+          path: diskPathOf(asset.originalPath)!,
           fileName: asset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -843,7 +831,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(authStub.admin, asset.id, { download: true })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.originalPath,
+          path: diskPathOf(asset.originalPath)!,
           fileName: asset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -854,7 +842,7 @@ describe(AssetMediaService.name, () => {
 
     it('should create a safe redirect response for S3 originals', async () => {
       const asset = AssetFactory.create({
-        originalPath: 'upload/admin/aa/bb/image.jpg',
+        originalPath: 's3://default/upload/admin/aa/bb/image.jpg',
         originalFileName: 'image.jpg',
       });
       const s3Backend = {
@@ -866,8 +854,7 @@ describe(AssetMediaService.name, () => {
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginal.mockResolvedValue(asset);
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         await expect(sut.downloadOriginal(authStub.admin, asset.id, {})).resolves.toEqual(
@@ -883,13 +870,13 @@ describe(AssetMediaService.name, () => {
           disposition: 'inline',
         });
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
     it('should thread the client range down to the backend so resumable downloads work', async () => {
       const asset = AssetFactory.create({
-        originalPath: 'upload/admin/aa/bb/image.jpg',
+        originalPath: 's3://default/upload/admin/aa/bb/image.jpg',
         originalFileName: 'image.jpg',
       });
       const s3Backend = {
@@ -903,8 +890,7 @@ describe(AssetMediaService.name, () => {
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginal.mockResolvedValue(asset);
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         await expect(sut.downloadOriginal(authStub.admin, asset.id, {}, 'bytes=0-1023')).resolves.toEqual(
@@ -915,7 +901,7 @@ describe(AssetMediaService.name, () => {
           expect.objectContaining({ range: 'bytes=0-1023' }),
         );
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
@@ -931,7 +917,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(AuthFactory.create(), editedAsset.id, {})).resolves.toEqual(
         new ImmichFileResponse({
-          path: editedAsset.files[3].path,
+          path: diskPathOf(editedAsset.files[3].path)!,
           fileName: editedAsset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -951,7 +937,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(AuthFactory.create(), editedAsset.id, { edited: true })).resolves.toEqual(
         new ImmichFileResponse({
-          path: editedAsset.files[3].path,
+          path: diskPathOf(editedAsset.files[3].path)!,
           fileName: editedAsset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -970,7 +956,7 @@ describe(AssetMediaService.name, () => {
         sut.downloadOriginal(AuthFactory.from().sharedLink().build(), editedAsset.id, { edited: false }),
       ).resolves.toEqual(
         new ImmichFileResponse({
-          path: fullsizeEdited.path,
+          path: diskPathOf(fullsizeEdited.path)!,
           fileName: editedAsset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -990,7 +976,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(AuthFactory.create(), editedAsset.id, { edited: false })).resolves.toEqual(
         new ImmichFileResponse({
-          path: editedAsset.originalPath,
+          path: diskPathOf(editedAsset.originalPath)!,
           fileName: editedAsset.originalFileName,
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
@@ -1002,7 +988,7 @@ describe(AssetMediaService.name, () => {
       const trimmedVideoFile = AssetFileFactory.create({
         type: AssetFileType.EncodedVideo,
         isEdited: true,
-        path: '/encoded-video/owner/asset_edited.mp4',
+        path: 'file:///encoded-video/owner/asset_edited.mp4',
       });
       const editedAsset = AssetFactory.from({ type: AssetType.Video })
         .edit({ action: AssetEditAction.Trim })
@@ -1016,7 +1002,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.downloadOriginal(AuthFactory.create(), editedAsset.id, {})).resolves.toEqual(
         new ImmichFileResponse({
-          path: trimmedVideoFile.path,
+          path: diskPathOf(trimmedVideoFile.path)!,
           fileName: expect.stringMatching(/\.mp4$/),
           contentType: 'video/mp4',
           cacheControl: CacheControl.PrivateWithCache,
@@ -1041,7 +1027,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.THUMBNAIL })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
@@ -1051,7 +1037,7 @@ describe(AssetMediaService.name, () => {
 
     it('should return safe redirects for a burst of S3 thumbnail loads without API streaming', async () => {
       const asset = AssetFactory.from()
-        .file({ type: AssetFileType.Thumbnail, path: 'thumbs/admin/aa/bb/thumb.jpg' })
+        .file({ type: AssetFileType.Thumbnail, path: 's3://default/thumbs/admin/aa/bb/thumb.jpg' })
         .build();
       const path = asset.files[0].path;
       const s3Backend = {
@@ -1063,8 +1049,7 @@ describe(AssetMediaService.name, () => {
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForThumbnail.mockResolvedValue({ ...asset, path });
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         const results = await Promise.all(
@@ -1084,20 +1069,20 @@ describe(AssetMediaService.name, () => {
           );
         }
         expect(s3Backend.getServeStrategy).toHaveBeenCalledTimes(150);
-        expect(s3Backend.getServeStrategy).toHaveBeenNthCalledWith(1, path, {
+        expect(s3Backend.getServeStrategy).toHaveBeenNthCalledWith(1, 'thumbs/admin/aa/bb/thumb.jpg', {
           contentType: 'image/jpeg',
           cacheControl: CacheControl.PrivateWithCache,
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
           disposition: 'inline',
         });
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
     it('should not claim range support for proxied thumbnails, which ignore the Range header', async () => {
       const asset = AssetFactory.from()
-        .file({ type: AssetFileType.Thumbnail, path: 'thumbs/admin/aa/bb/thumb.jpg' })
+        .file({ type: AssetFileType.Thumbnail, path: 's3://default/thumbs/admin/aa/bb/thumb.jpg' })
         .build();
       const path = asset.files[0].path;
       const s3Backend = {
@@ -1110,8 +1095,7 @@ describe(AssetMediaService.name, () => {
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForThumbnail.mockResolvedValue({ ...asset, path });
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         const response = (await sut.viewThumbnail(authStub.admin, asset.id, {
@@ -1122,7 +1106,7 @@ describe(AssetMediaService.name, () => {
         // client is never told it can range-request this URL
         expect(response.acceptsRanges).toBeUndefined();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
@@ -1132,7 +1116,7 @@ describe(AssetMediaService.name, () => {
       mocks.asset.getForThumbnail.mockResolvedValue({ ...asset, path: asset.files[0].path });
       await expect(sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.PREVIEW })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_preview.jpg`,
@@ -1142,13 +1126,13 @@ describe(AssetMediaService.name, () => {
 
     it('should get thumbnail file', async () => {
       const asset = AssetFactory.from()
-        .file({ type: AssetFileType.Thumbnail, path: '/uploads/user-id/webp/path.ext' })
+        .file({ type: AssetFileType.Thumbnail, path: 'file:///uploads/user-id/webp/path.ext' })
         .build();
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForThumbnail.mockResolvedValue({ ...asset, path: asset.files[0].path });
       await expect(sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.THUMBNAIL })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'application/octet-stream',
           fileName: `IMG_${asset.id}_thumbnail.ext`,
@@ -1163,7 +1147,7 @@ describe(AssetMediaService.name, () => {
       mocks.asset.getForThumbnail.mockResolvedValue({ ...asset, path: asset.files[0].path });
       await expect(sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.THUMBNAIL })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
@@ -1180,7 +1164,7 @@ describe(AssetMediaService.name, () => {
         sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.THUMBNAIL, edited: true }),
       ).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
@@ -1197,7 +1181,7 @@ describe(AssetMediaService.name, () => {
         sut.viewThumbnail(authStub.admin, asset.id, { size: AssetMediaSize.THUMBNAIL, edited: false }),
       ).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
@@ -1217,7 +1201,7 @@ describe(AssetMediaService.name, () => {
         }),
       ).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `IMG_${asset.id}_thumbnail.jpg`,
@@ -1236,7 +1220,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.viewThumbnail(auth, asset.id, { size: AssetMediaSize.PREVIEW })).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.files[0].path,
+          path: diskPathOf(asset.files[0].path)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'image/jpeg',
           fileName: `${asset.id}_preview.jpg`,
@@ -1263,7 +1247,7 @@ describe(AssetMediaService.name, () => {
 
     it('should return the encoded video path if available', async () => {
       const asset = AssetFactory.from()
-        .file({ type: AssetFileType.EncodedVideo, path: '/path/to/encoded/video.mp4' })
+        .file({ type: AssetFileType.EncodedVideo, path: 'file:///path/to/encoded/video.mp4' })
         .build();
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForVideo.mockResolvedValue({
@@ -1281,7 +1265,7 @@ describe(AssetMediaService.name, () => {
     });
 
     it('should fall back to the original path', async () => {
-      const asset = AssetFactory.create({ type: AssetType.Video, originalPath: '/original/path.ext' });
+      const asset = AssetFactory.create({ type: AssetType.Video, originalPath: 'file:///original/path.ext' });
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForVideo.mockResolvedValue({
         originalPath: asset.originalPath,
@@ -1290,7 +1274,7 @@ describe(AssetMediaService.name, () => {
 
       await expect(sut.playbackVideo(authStub.admin, asset.id)).resolves.toEqual(
         new ImmichFileResponse({
-          path: asset.originalPath,
+          path: diskPathOf(asset.originalPath)!,
           cacheControl: CacheControl.PrivateWithCache,
           contentType: 'application/octet-stream',
         }),
@@ -1309,11 +1293,10 @@ describe(AssetMediaService.name, () => {
       };
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set(['asset-1']));
       mocks.asset.getForVideo.mockResolvedValue({
-        originalPath: 'upload/admin/aa/bb/video.mp4',
+        originalPath: 's3://default/upload/admin/aa/bb/video.mp4',
         encodedVideoPath: null,
       });
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         await expect(sut.playbackVideo(authStub.admin, 'asset-1', 'bytes=0-1023')).resolves.toEqual(
@@ -1331,7 +1314,7 @@ describe(AssetMediaService.name, () => {
           expect.objectContaining({ range: 'bytes=0-1023' }),
         );
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
@@ -1345,11 +1328,10 @@ describe(AssetMediaService.name, () => {
       };
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set(['asset-1']));
       mocks.asset.getForVideo.mockResolvedValue({
-        originalPath: 'upload/admin/aa/bb/video.mp4',
+        originalPath: 's3://default/upload/admin/aa/bb/video.mp4',
         encodedVideoPath: null,
       });
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         const response = await sut.playbackVideo(authStub.admin, 'asset-1');
@@ -1360,7 +1342,7 @@ describe(AssetMediaService.name, () => {
         );
         expect((response as ImmichStreamResponse).contentRange).toBeUndefined();
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
 
@@ -1370,18 +1352,17 @@ describe(AssetMediaService.name, () => {
       };
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set(['asset-1']));
       mocks.asset.getForVideo.mockResolvedValue({
-        originalPath: 'upload/admin/aa/bb/video.mp4',
+        originalPath: 's3://default/upload/admin/aa/bb/video.mp4',
         encodedVideoPath: null,
       });
-      const previousS3Backend = (StorageService as any).s3Backend;
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
 
       try {
         await expect(sut.playbackVideo(authStub.admin, 'asset-1', 'bytes=999999999-')).rejects.toMatchObject({
           status: 416,
         });
       } finally {
-        (StorageService as any).s3Backend = previousS3Backend;
+        vi.restoreAllMocks();
       }
     });
   });
@@ -1613,7 +1594,7 @@ describe(AssetMediaService.name, () => {
 
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
-        data: { files: ['fake_path/asset_1.jpeg', undefined] },
+        data: { files: ['file://fake_path/asset_1.jpeg', undefined] },
       });
     });
 

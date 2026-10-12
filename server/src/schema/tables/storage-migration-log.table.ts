@@ -23,8 +23,9 @@ export class StorageMigrationLogTable {
   @Column({ type: 'text' })
   newPath!: string;
 
+  /** `file://` or `s3://<alias>` */
   @Column({ type: 'character varying' })
-  direction!: string;
+  target!: string;
 
   @Column({ type: 'uuid' })
   batchId!: string;

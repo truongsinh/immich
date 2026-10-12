@@ -279,7 +279,7 @@ describe(UserService.name, () => {
 
     it('should throw an error if the user profile could not be updated with the new image', async () => {
       const file = { path: '/profile/path' } as Express.Multer.File;
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.jpg' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.jpg' });
       mocks.user.get.mockResolvedValue(user);
       mocks.user.update.mockRejectedValue(new InternalServerErrorException('mocked error'));
 
@@ -288,7 +288,7 @@ describe(UserService.name, () => {
 
     it('should throw BadRequestException and clean up raw upload when thumbnail processing fails', async () => {
       const file = { path: '/profile/path' } as Express.Multer.File;
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.jpg' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.jpg' });
 
       mocks.user.get.mockResolvedValue(user);
       mocks.media.generateThumbnail.mockRejectedValue(new Error('not an image'));
@@ -296,11 +296,13 @@ describe(UserService.name, () => {
       await expect(sut.createProfileImage(authStub.admin, file)).rejects.toThrowError(BadRequestException);
 
       expect(mocks.user.update).not.toHaveBeenCalled();
-      expect(mocks.job.queue.mock.calls).toEqual([[{ name: JobName.FileDelete, data: { files: [file.path] } }]]);
+      expect(mocks.job.queue.mock.calls).toEqual([
+        [{ name: JobName.FileDelete, data: { files: [`file://${file.path}`] } }],
+      ]);
     });
 
     it('should delete the raw upload and the previous profile image', async () => {
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.jpg' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.jpg' });
       const file = { path: '/profile/path' } as Express.Multer.File;
 
       mocks.user.get.mockResolvedValue(user);
@@ -309,7 +311,7 @@ describe(UserService.name, () => {
       await sut.createProfileImage(authStub.admin, file);
 
       expect(mocks.job.queue.mock.calls).toEqual([
-        [{ name: JobName.FileDelete, data: { files: [file.path, user.profileImagePath] } }],
+        [{ name: JobName.FileDelete, data: { files: [`file://${file.path}`, user.profileImagePath] } }],
       ]);
     });
 
@@ -321,7 +323,9 @@ describe(UserService.name, () => {
 
       await sut.createProfileImage(authStub.admin, file);
 
-      expect(mocks.job.queue.mock.calls).toEqual([[{ name: JobName.FileDelete, data: { files: [file.path] } }]]);
+      expect(mocks.job.queue.mock.calls).toEqual([
+        [{ name: JobName.FileDelete, data: { files: [`file://${file.path}`] } }],
+      ]);
       expect(mocks.job.queueAll).not.toHaveBeenCalled();
     });
 
@@ -368,16 +372,15 @@ describe(UserService.name, () => {
           put: vi.fn().mockResolvedValue(void 0),
           getServeStrategy: vi.fn(),
         };
-        (StorageService as any).s3Backend = mockS3Backend;
-        (StorageService as any).writeBackendType = 's3';
+        vi.spyOn(StorageService, 'getWriteTarget').mockReturnValue({ type: 's3', alias: 'default' });
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockS3Backend]]) as any);
       });
 
       afterEach(() => {
-        (StorageService as any).s3Backend = void 0;
-        (StorageService as any).writeBackendType = 'disk';
+        vi.restoreAllMocks();
       });
 
-      it('should upload profile image to S3 and store relative path', async () => {
+      it('should upload profile image to S3 and store its S3 URI', async () => {
         const user = factory.userAdmin({ profileImagePath: '' });
         const file = { path: '/data/profile/user-id/temp-file.jpg', originalname: 'avatar.jpg' } as Express.Multer.File;
         // The profile image is run through the thumbnail pipeline, which generates a
@@ -393,7 +396,7 @@ describe(UserService.name, () => {
           contentType: 'image/webp',
         });
         expect(mocks.user.update).toHaveBeenCalledWith(user.id, {
-          profileImagePath: relativeKey,
+          profileImagePath: `s3://default/${relativeKey}`,
           profileChangedAt: expect.any(Date),
         });
       });
@@ -429,12 +432,12 @@ describe(UserService.name, () => {
 
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [file.path] },
+          data: { files: [`file://${file.path}`] },
         });
       });
 
       it('should delete both old profile image and local temp file when replacing on S3', async () => {
-        const user = factory.userAdmin({ profileImagePath: '/data/profile/user-id/old.jpg' });
+        const user = factory.userAdmin({ profileImagePath: 'file:///data/profile/user-id/old.jpg' });
         const file = { path: '/data/profile/user-id/new-file.jpg', originalname: 'avatar.jpg' } as Express.Multer.File;
 
         mocks.user.get.mockResolvedValue(user);
@@ -448,16 +451,16 @@ describe(UserService.name, () => {
         const generatedThumbnailPath = `/data/profile/${user.id}/random-uuid.webp`;
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [generatedThumbnailPath] },
+          data: { files: [`file://${generatedThumbnailPath}`] },
         });
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [file.path, '/data/profile/user-id/old.jpg'] },
+          data: { files: [`file://${file.path}`, 'file:///data/profile/user-id/old.jpg'] },
         });
       });
 
       it('should clean up old S3 profile image when replacing with a new S3 upload', async () => {
-        const oldRelativeKey = 'profile/user-id/ab/cd/old-file.jpg';
+        const oldRelativeKey = 's3://default/profile/user-id/ab/cd/old-file.jpg';
         const user = factory.userAdmin({ profileImagePath: oldRelativeKey });
         const file = { path: '/data/profile/user-id/new-file.jpg', originalname: 'avatar.jpg' } as Express.Multer.File;
 
@@ -469,11 +472,11 @@ describe(UserService.name, () => {
         const generatedThumbnailPath = `/data/profile/${user.id}/random-uuid.webp`;
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [generatedThumbnailPath] },
+          data: { files: [`file://${generatedThumbnailPath}`] },
         });
         expect(mocks.job.queue).toHaveBeenCalledWith({
           name: JobName.FileDelete,
-          data: { files: [file.path, oldRelativeKey] },
+          data: { files: [`file://${file.path}`, oldRelativeKey] },
         });
       });
 
@@ -520,7 +523,7 @@ describe(UserService.name, () => {
     });
 
     it('should delete the profile image if user has one', async () => {
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.jpg' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.jpg' });
       const files = [user.profileImagePath];
 
       mocks.user.get.mockResolvedValue(user);
@@ -531,7 +534,7 @@ describe(UserService.name, () => {
     });
 
     it('should update user to remove profile image path', async () => {
-      const user = factory.userAdmin({ profileImagePath: '/path/to/profile.jpg' });
+      const user = factory.userAdmin({ profileImagePath: 'file:///path/to/profile.jpg' });
       mocks.user.get.mockResolvedValue(user);
 
       await sut.deleteProfileImage(factory.auth({ user }));
@@ -548,8 +551,8 @@ describe(UserService.name, () => {
       await expect(sut.deleteProfileImage(authStub.admin)).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('should queue deletion of S3 profile image (relative path)', async () => {
-      const s3Path = 'profile/user-id/ab/cd/photo.jpg';
+    it('should queue deletion of S3 profile image (S3 URI)', async () => {
+      const s3Path = 's3://default/profile/user-id/ab/cd/photo.jpg';
       const user = factory.userAdmin({ profileImagePath: s3Path });
       mocks.user.get.mockResolvedValue(user);
 
@@ -559,7 +562,7 @@ describe(UserService.name, () => {
         profileImagePath: '',
         profileChangedAt: expect.any(Date),
       });
-      // FileDelete handler uses resolveBackendForKey to route relative paths to S3
+      // FileDelete handler resolves the S3 URI to its alias backend
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
         data: { files: [s3Path] },
@@ -585,7 +588,7 @@ describe(UserService.name, () => {
     });
 
     it('should return the profile picture', async () => {
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.jpg' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.jpg' });
       mocks.user.get.mockResolvedValue(user);
 
       await expect(sut.getProfileImage(user.id)).resolves.toEqual(
@@ -600,7 +603,7 @@ describe(UserService.name, () => {
     });
 
     it('should return the profile picture with the content-type matching the stored file', async () => {
-      const user = UserFactory.create({ profileImagePath: '/path/to/profile.webp' });
+      const user = UserFactory.create({ profileImagePath: 'file:///path/to/profile.webp' });
       mocks.user.get.mockResolvedValue(user);
 
       await expect(sut.getProfileImage(user.id)).resolves.toEqual(
@@ -612,15 +615,19 @@ describe(UserService.name, () => {
       );
     });
 
-    it('should serve profile image from S3 backend when path is relative', async () => {
-      const s3Path = 'profile/user-id/ab/cd/photo.jpg';
+    it('should serve profile image from S3 backend when path is an S3 URI', async () => {
+      const s3Path = 's3://default/profile/user-id/ab/cd/photo.jpg';
       const user = UserFactory.create({ profileImagePath: s3Path });
       mocks.user.get.mockResolvedValue(user);
+      const getServeStrategy = vi.fn().mockResolvedValue({ type: 'redirect', url: 'https://s3.example/photo.jpg' });
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { getServeStrategy }]]) as any);
 
       const result = await sut.getProfileImage(user.id);
 
       expect(result).toBeDefined();
+      expect(getServeStrategy).toHaveBeenCalledWith('profile/user-id/ab/cd/photo.jpg', expect.anything());
       expect(mocks.user.get).toHaveBeenCalledWith(user.id, {});
+      vi.restoreAllMocks();
     });
   });
 
@@ -856,11 +863,11 @@ describe(UserService.name, () => {
 
       beforeEach(() => {
         mockS3Backend = { deletePrefix: vi.fn().mockResolvedValue(void 0) };
-        (StorageService as any).s3Backend = mockS3Backend;
+        vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockS3Backend]]) as any);
       });
 
       afterEach(() => {
-        (StorageService as any).s3Backend = void 0;
+        vi.restoreAllMocks();
       });
 
       it('should delete the four user-scoped S3 prefixes in addition to disk folders', async () => {
@@ -899,12 +906,12 @@ describe(UserService.name, () => {
     it('should not reach any S3 backend when S3 is not configured (regression guard)', async () => {
       const user = { id: 'disk-only-user', deletedAt: makeDeletedAt(10) } as UserAdmin;
       mocks.user.get.mockResolvedValue(user);
-      expect((StorageService as any).s3Backend).toBeUndefined();
+      expect(StorageService.getAliasBackends().size).toBe(0);
 
       await sut.handleUserDelete({ id: user.id });
 
       expect(mocks.storage.unlinkDir).toHaveBeenCalledTimes(5);
-      expect((StorageService as any).s3Backend).toBeUndefined();
+      expect(StorageService.getAliasBackends().size).toBe(0);
     });
 
     it('should emit AlbumDelete for each owned album before albumRepository.deleteAll (faces F2)', async () => {
@@ -956,7 +963,7 @@ describe(UserService.name, () => {
 
   describe('handleUserSyncUsage', () => {
     afterEach(() => {
-      (StorageService as any).s3Backend = undefined;
+      vi.restoreAllMocks();
     });
 
     it('should sync usage from S3 prefixes and existing disk folders', async () => {
@@ -969,7 +976,7 @@ describe(UserService.name, () => {
           .mockResolvedValueOnce(300)
           .mockResolvedValueOnce(400),
       };
-      (StorageService as any).s3Backend = s3Backend;
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', s3Backend]]) as any);
       mocks.systemMetadata.get.mockResolvedValue({ storageUsage: { includeDerivatives: true } });
       (mocks.user as any).setUsage = vi.fn().mockResolvedValue(void 0);
       mocks.user.getList.mockResolvedValue([user]);

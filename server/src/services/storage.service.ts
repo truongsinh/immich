@@ -1,13 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { join } from 'node:path';
+import type { PathType } from 'src/enum.js';
+import type { EnvData } from 'src/repositories/config.repository.js';
 import type { JobOf, SystemFlags } from 'src/types.js';
 import { DiskStorageBackend } from 'src/backends/disk-storage.backend.js';
 import { S3StorageBackend } from 'src/backends/s3-storage.backend.js';
-import { resolveBackend } from 'src/backends/storage-backend.provider.js';
+import {
+  StorageTarget,
+  diskPathOf,
+  resolveStoredPath,
+  storageTargetUri,
+} from 'src/backends/storage-backend.provider.js';
 import { ErrorMessages } from 'src/constants.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import {
+  AssetFileType,
+  AssetPathType,
   BootstrapEventPriority,
   DatabaseLock,
   JobName,
@@ -15,6 +24,7 @@ import {
   QueueName,
   StorageFolder,
   SystemMetadataKey,
+  UserPathType,
 } from 'src/enum.js';
 import { StorageBackend } from 'src/interfaces/storage-backend.interface.js';
 import { BaseService } from 'src/services/base.service.js';
@@ -22,32 +32,50 @@ import { ImmichStartupError } from 'src/utils/misc.js';
 
 const docsMessage = `Please see https://docs.immich.app/administration/system-integrity#folder-checks for more information.`;
 
+const ORIGINALS: ReadonlySet<PathType> = new Set([AssetPathType.Original, AssetFileType.Sidecar, UserPathType.Profile]);
+
 @Injectable()
 export class StorageService extends BaseService {
   private static diskBackend: DiskStorageBackend;
-  private static s3Backend: S3StorageBackend | undefined;
-  private static writeBackendType: 'disk' | 's3' = 'disk';
+  private static aliasBackends = new Map<string, S3StorageBackend>();
+  private static writeTargets: EnvData['storage']['writeTargets'] = {
+    originals: { type: 'disk' },
+    derivatives: { type: 'disk' },
+  };
 
   static getDiskBackend(): DiskStorageBackend {
     return StorageService.diskBackend;
   }
 
-  static getS3Backend(): S3StorageBackend | undefined {
-    return StorageService.s3Backend;
+  static getAliasBackends(): ReadonlyMap<string, S3StorageBackend> {
+    return StorageService.aliasBackends;
   }
 
-  static getWriteBackend(): StorageBackend {
-    if (StorageService.writeBackendType === 's3' && StorageService.s3Backend) {
-      return StorageService.s3Backend;
-    }
-    return StorageService.diskBackend;
+  /** The backend and key behind a stored path; `disk` lets a caller keep disk I/O on its own repository. */
+  static resolve(path: string, disk: StorageBackend = StorageService.getDiskBackend()) {
+    return resolveStoredPath(path, { disk, aliases: StorageService.getAliasBackends() });
   }
 
-  static resolveBackendForKey(key: string): StorageBackend {
-    if (StorageService.s3Backend) {
-      return resolveBackend(key, StorageService.diskBackend, StorageService.s3Backend);
+  /** Where a new file of this kind is written: originals, sidecars and profile images vs generated files. */
+  static getWriteTarget(pathType: PathType): StorageTarget {
+    return ORIGINALS.has(pathType) ? StorageService.writeTargets.originals : StorageService.writeTargets.derivatives;
+  }
+
+  /** Upload staging and backups always live on disk; the other folders only while their write target is disk. */
+  private static isKeptOnDisk(folder: StorageFolder): boolean {
+    switch (folder) {
+      case StorageFolder.Library:
+      case StorageFolder.Profile: {
+        return StorageService.writeTargets.originals.type === 'disk';
+      }
+      case StorageFolder.Thumbnails:
+      case StorageFolder.EncodedVideo: {
+        return StorageService.writeTargets.derivatives.type === 'disk';
+      }
+      default: {
+        return true;
+      }
     }
-    return StorageService.diskBackend;
   }
 
   private detectMediaLocation(): string {
@@ -77,21 +105,19 @@ export class StorageService extends BaseService {
   async onBootstrap() {
     StorageCore.setMediaLocation(this.detectMediaLocation());
 
-    // Initialize storage backends
-    const envData = this.configRepository.getEnv();
+    const { storage } = this.configRepository.getEnv();
     StorageService.diskBackend = new DiskStorageBackend(StorageCore.getMediaLocation(), this.storageRepository);
-    StorageService.writeBackendType = envData.storage.backend;
-
-    if (envData.storage.s3.bucket) {
-      StorageService.s3Backend = new S3StorageBackend(envData.storage.s3);
-      this.logger.log(`S3 storage backend configured (bucket: ${envData.storage.s3.bucket})`);
+    // building a client opens no connection, so an unreachable alias cannot hold up startup
+    StorageService.aliasBackends = new Map(
+      Object.entries(storage.aliases).map(([alias, config]) => [alias, new S3StorageBackend(config)]),
+    );
+    StorageService.writeTargets = storage.writeTargets;
+    for (const [alias, config] of Object.entries(storage.aliases)) {
+      this.logger.log(`Storage alias ${alias}: bucket ${config.bucket}, ${config.serveMode} mode`);
     }
-
-    if (envData.storage.backend === 's3' && !StorageService.s3Backend) {
-      throw new ImmichStartupError('IMMICH_STORAGE_BACKEND is set to s3 but IMMICH_S3_BUCKET is not configured');
-    }
-
-    this.logger.log(`Storage write backend: ${envData.storage.backend}`);
+    this.logger.log(
+      `Storage write targets: originals ${storageTargetUri(storage.writeTargets.originals)}, derivatives ${storageTargetUri(storage.writeTargets.derivatives)}`,
+    );
 
     await this.databaseRepository.withLock(DatabaseLock.SystemFileMounts, async () => {
       const flags =
@@ -109,6 +135,10 @@ export class StorageService extends BaseService {
       try {
         // check each folder exists and is writable
         for (const folder of Object.values(StorageFolder)) {
+          if (!StorageService.isKeptOnDisk(folder)) {
+            continue;
+          }
+
           if (!flags.mountChecks[folder]) {
             this.logger.log(`Writing initial mount file for the ${folder} folder`);
             await this.createMountFile(folder);
@@ -146,9 +176,8 @@ export class StorageService extends BaseService {
       const current = StorageCore.getMediaLocation();
       const samples = await this.assetRepository.getFileSamples();
       const savedValue = await this.systemMetadataRepository.get(SystemMetadataKey.MediaLocation);
-      if (samples.length > 0) {
-        const path = samples[0].path;
-
+      const path = samples.map((sample) => diskPathOf(sample.path)).find((diskPath) => diskPath !== undefined);
+      if (path) {
         let previous = savedValue?.location || '';
 
         if (!previous && this.configRepository.getEnv().storage.mediaLocation) {
@@ -156,7 +185,7 @@ export class StorageService extends BaseService {
         }
 
         if (!previous) {
-          previous = path.startsWith('upload/') ? 'upload' : '/usr/src/app/upload';
+          previous = '/usr/src/app/upload';
         }
 
         if (previous !== current) {
@@ -191,8 +220,8 @@ export class StorageService extends BaseService {
       }
 
       try {
-        const backend = await this.backendFor(file);
-        await backend.delete(file);
+        const { backend, key } = await this.resolveStored(file);
+        await backend.delete(key);
       } catch (error: any) {
         this.logger.warn('Unable to remove file', error);
       }

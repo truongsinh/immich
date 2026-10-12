@@ -64,7 +64,7 @@ export class AssetFactory {
       livePhotoVideoId: null,
       localDateTime: new Date(now),
       originalFileName,
-      originalPath: `/data/library/${originalFileName}`,
+      originalPath: `file:///data/library/${originalFileName}`,
       ownerId: newUuid(),
       stackId: null,
       thumbhash: null,

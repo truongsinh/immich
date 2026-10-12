@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { diff } from 'semver';
 import z from 'zod';
 import type { ExtensionVersion, VectorExtension } from 'src/types.js';
+import { DISK, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import {
   EXTENSION_NAMES,
   POSTGRES_VERSION_RANGE,
@@ -436,9 +437,9 @@ export class DatabaseRepository {
     }
 
     // escaping regex special characters with a backslash
-    const sourceRegex = '^' + sourceFolder.replaceAll(/[-[\]{}()*+?.,\\^$|#\s]/g, String.raw`\$&`);
+    const sourceRegex = '^' + toStorageUri(DISK, sourceFolder).replaceAll(/[-[\]{}()*+?.,\\^$|#\s]/g, String.raw`\$&`);
     const source = sql.raw(`'${sourceRegex}'`);
-    const target = sql.lit(targetFolder);
+    const target = sql.lit(toStorageUri(DISK, targetFolder));
 
     await this.db.transaction().execute(async (tx) => {
       await tx

@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { Readable } from 'node:stream';
 import { vitest } from 'vitest';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { DownloadResponseDto } from 'src/dtos/download.dto.js';
 import { AssetType, SharedSpaceRole } from 'src/enum.js';
 import { DownloadService } from 'src/services/download.service.js';
@@ -63,7 +64,7 @@ describe(DownloadService.name, () => {
       });
 
       expect(archiveMock.addFile).toHaveBeenCalledTimes(1);
-      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, asset.originalPath, asset.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, diskPathOf(asset.originalPath), asset.originalFileName);
     });
 
     it('should log a warning if the original path could not be resolved', async () => {
@@ -87,8 +88,8 @@ describe(DownloadService.name, () => {
 
       expect(mocks.logger.warn).toHaveBeenCalledTimes(2);
       expect(archiveMock.addFile).toHaveBeenCalledTimes(2);
-      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, asset1.originalPath, asset1.originalFileName);
-      expect(archiveMock.addFile).toHaveBeenNthCalledWith(2, asset2.originalPath, asset2.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, diskPathOf(asset1.originalPath), asset1.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenNthCalledWith(2, diskPathOf(asset2.originalPath), asset2.originalFileName);
     });
 
     it('should download an archive', async () => {
@@ -110,8 +111,8 @@ describe(DownloadService.name, () => {
       });
 
       expect(archiveMock.addFile).toHaveBeenCalledTimes(2);
-      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, asset1.originalPath, asset1.originalFileName);
-      expect(archiveMock.addFile).toHaveBeenNthCalledWith(2, asset2.originalPath, asset2.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenNthCalledWith(1, diskPathOf(asset1.originalPath), asset1.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenNthCalledWith(2, diskPathOf(asset2.originalPath), asset2.originalFileName);
     });
 
     it('should handle duplicate file names', async () => {
@@ -172,7 +173,7 @@ describe(DownloadService.name, () => {
         finalize: vitest.fn(),
         stream: new Readable(),
       };
-      const asset = AssetFactory.create({ originalFileName: input, originalPath: '/data/library/safe.jpg' });
+      const asset = AssetFactory.create({ originalFileName: input, originalPath: 'file:///data/library/safe.jpg' });
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([asset]);
@@ -193,11 +194,11 @@ describe(DownloadService.name, () => {
       };
       const asset1 = AssetFactory.create({
         originalFileName: '../../../tmp/pwn.jpg',
-        originalPath: '/data/library/a.jpg',
+        originalPath: 'file:///data/library/a.jpg',
       });
       const asset2 = AssetFactory.create({
         originalFileName: '../../../tmp/pwn.jpg',
-        originalPath: '/data/library/b.jpg',
+        originalPath: 'file:///data/library/b.jpg',
       });
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset1.id, asset2.id]));
@@ -220,7 +221,7 @@ describe(DownloadService.name, () => {
         stream: new Readable(),
       };
 
-      const asset = AssetFactory.create({ originalPath: '/path/to/symlink.jpg' });
+      const asset = AssetFactory.create({ originalPath: 'file:///path/to/symlink.jpg' });
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([asset]);
       mocks.storage.realpath.mockResolvedValue('/path/to/realpath.jpg');
@@ -240,7 +241,7 @@ describe(DownloadService.name, () => {
         stream: new Readable(),
       };
       const asset = AssetFactory.create();
-      const editedAsset = { ...asset, editedPath: '/edited/path.jpg' };
+      const editedAsset = { ...asset, editedPath: 'file:///edited/path.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([editedAsset]);
@@ -272,7 +273,7 @@ describe(DownloadService.name, () => {
       });
 
       expect(archiveMock.addFile).toHaveBeenCalledTimes(1);
-      expect(archiveMock.addFile).toHaveBeenCalledWith(asset.originalPath, asset.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenCalledWith(diskPathOf(asset.originalPath), asset.originalFileName);
     });
 
     it('should use EncodedVideo editedPath for trimmed video in archive', async () => {
@@ -282,7 +283,7 @@ describe(DownloadService.name, () => {
         stream: new Readable(),
       };
       const asset = AssetFactory.create({ type: AssetType.Video });
-      const editedAsset = { ...asset, editedPath: '/encoded-video/owner/asset_edited.mp4' };
+      const editedAsset = { ...asset, editedPath: 'file:///encoded-video/owner/asset_edited.mp4' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([editedAsset]);
@@ -313,7 +314,7 @@ describe(DownloadService.name, () => {
       });
 
       expect(archiveMock.addFile).toHaveBeenCalledTimes(1);
-      expect(archiveMock.addFile).toHaveBeenCalledWith(asset.originalPath, asset.originalFileName);
+      expect(archiveMock.addFile).toHaveBeenCalledWith(diskPathOf(asset.originalPath), asset.originalFileName);
     });
 
     it('should use a LazyS3Readable for S3 assets without calling backend.get() upfront', async () => {
@@ -323,16 +324,16 @@ describe(DownloadService.name, () => {
         stream: new Readable(),
       };
 
-      // Relative path → isAbsolute returns false → S3 branch
+      // a path on an S3 alias takes the S3 branch
       const asset = AssetFactory.create();
-      const s3Asset = { ...asset, originalPath: 'upload/library/photo.jpg' };
+      const s3Asset = { ...asset, originalPath: 's3://default/upload/library/photo.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([s3Asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([s3Asset]);
       mocks.storage.createZipStream.mockReturnValue(archiveMock);
 
       const mockBackend = { get: vitest.fn() };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       await sut.downloadArchive(authStub.admin, { assetIds: [s3Asset.id] });
 
@@ -360,15 +361,15 @@ describe(DownloadService.name, () => {
 
       const asset1 = AssetFactory.create();
       const asset2 = AssetFactory.create();
-      const s3Asset1 = { ...asset1, originalPath: 'upload/library/a.jpg' };
-      const s3Asset2 = { ...asset2, originalPath: 'upload/library/b.jpg' };
+      const s3Asset1 = { ...asset1, originalPath: 's3://default/upload/library/a.jpg' };
+      const s3Asset2 = { ...asset2, originalPath: 's3://default/upload/library/b.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([s3Asset1.id, s3Asset2.id]));
       mocks.asset.getForOriginals.mockResolvedValue([s3Asset1, s3Asset2]);
       mocks.storage.createZipStream.mockReturnValue(archiveMock);
 
       const mockBackend = { get: vitest.fn() };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       const { abort } = await sut.downloadArchive(authStub.admin, {
         assetIds: [s3Asset1.id, s3Asset2.id],
@@ -393,14 +394,14 @@ describe(DownloadService.name, () => {
       };
 
       const asset = AssetFactory.create();
-      const s3Asset = { ...asset, originalPath: 'upload/library/photo.jpg' };
+      const s3Asset = { ...asset, originalPath: 's3://default/upload/library/photo.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([s3Asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([s3Asset]);
       mocks.storage.createZipStream.mockReturnValue(archiveMock);
 
       const mockBackend = { get: vitest.fn() };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       const { abort } = await sut.downloadArchive(authStub.admin, { assetIds: [s3Asset.id] });
 
@@ -443,10 +444,10 @@ describe(DownloadService.name, () => {
       };
 
       // Disk asset — absolute path
-      const diskAsset = AssetFactory.create({ originalPath: '/data/library/disk.jpg' });
+      const diskAsset = AssetFactory.create({ originalPath: 'file:///data/library/disk.jpg' });
       // S3 asset — relative path
       const s3AssetBase = AssetFactory.create();
-      const s3Asset = { ...s3AssetBase, originalPath: 'upload/library/s3.jpg' };
+      const s3Asset = { ...s3AssetBase, originalPath: 's3://default/upload/library/s3.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([diskAsset.id, s3Asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([diskAsset, s3Asset]);
@@ -454,7 +455,7 @@ describe(DownloadService.name, () => {
       mocks.storage.realpath.mockResolvedValue('/data/library/disk.jpg');
 
       const mockBackend = { get: vitest.fn() };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       await sut.downloadArchive(authStub.admin, { assetIds: [diskAsset.id, s3Asset.id] });
 
@@ -485,7 +486,7 @@ describe(DownloadService.name, () => {
       };
 
       const asset = AssetFactory.create();
-      const s3Asset = { ...asset, originalPath: 'upload/library/photo.jpg' };
+      const s3Asset = { ...asset, originalPath: 's3://default/upload/library/photo.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([s3Asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([s3Asset]);
@@ -493,7 +494,7 @@ describe(DownloadService.name, () => {
 
       const fetchError = new Error('S3 connection refused');
       const mockBackend = { get: vitest.fn().mockRejectedValue(fetchError) };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       await sut.downloadArchive(authStub.admin, { assetIds: [s3Asset.id] });
 
@@ -523,7 +524,7 @@ describe(DownloadService.name, () => {
       };
 
       const asset = AssetFactory.create();
-      const s3Asset = { ...asset, originalPath: 'upload/library/photo.jpg' };
+      const s3Asset = { ...asset, originalPath: 's3://default/upload/library/photo.jpg' };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([s3Asset.id]));
       mocks.asset.getForOriginals.mockResolvedValue([s3Asset]);
@@ -531,7 +532,7 @@ describe(DownloadService.name, () => {
 
       const s3Stream = new Readable({ read() {} });
       const mockBackend = { get: vitest.fn().mockResolvedValue({ stream: s3Stream }) };
-      vitest.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue(mockBackend as any);
+      vitest.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', mockBackend]]) as any);
 
       await sut.downloadArchive(authStub.admin, { assetIds: [s3Asset.id] });
 
@@ -702,8 +703,8 @@ describe(DownloadService.name, () => {
       );
       mocks.downloadRepository.downloadMotionAssetIds.mockReturnValue(
         makeStream([
-          { id: 'asset-3', livePhotoVideoId: null, size: 23_456, originalPath: '/path/to/file.mp4' },
-          { id: 'asset-4', livePhotoVideoId: null, size: 123_000, originalPath: '/path/to/file.mp4' },
+          { id: 'asset-3', livePhotoVideoId: null, size: 23_456, originalPath: 'file:///path/to/file.mp4' },
+          { id: 'asset-4', livePhotoVideoId: null, size: 123_000, originalPath: 'file:///path/to/file.mp4' },
         ]),
       );
 
@@ -766,7 +767,7 @@ describe(DownloadService.name, () => {
         makeStream([{ id: 'asset-1', livePhotoVideoId: 'motion-1', size: 5000 }]),
       );
       mocks.downloadRepository.downloadMotionAssetIds.mockReturnValue(
-        makeStream([{ id: 'motion-1', livePhotoVideoId: null, size: 2000, originalPath: '/path/to/file.mp4' }]),
+        makeStream([{ id: 'motion-1', livePhotoVideoId: null, size: 2000, originalPath: 'file:///path/to/file.mp4' }]),
       );
 
       const result = await sut.getDownloadInfo(authStub.admin, { spaceId });
@@ -796,7 +797,7 @@ describe(DownloadService.name, () => {
             id: 'asset-2',
             livePhotoVideoId: null,
             size: 23_456,
-            originalPath: '/data/encoded-video/uuid-MP.mp4',
+            originalPath: 'file:///data/encoded-video/uuid-MP.mp4',
           },
         ]),
       );

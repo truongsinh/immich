@@ -1,4 +1,5 @@
 import { Stats } from 'node:fs';
+import { DISK, diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { AssetPathType, AssetType, JobStatus } from 'src/enum.js';
 import { StorageTemplateService } from 'src/services/storage-template.service.js';
@@ -111,7 +112,7 @@ describe(StorageTemplateService.name, () => {
     });
 
     it('should skip S3 assets with relative paths', async () => {
-      const asset = AssetFactory.from({ originalPath: 'upload/user/ab/cd/file.jpg' }).exif().build();
+      const asset = AssetFactory.from({ originalPath: 's3://default/upload/user/ab/cd/file.jpg' }).exif().build();
       mocks.assetJob.getForStorageTemplateJob.mockResolvedValue(getForStorageTemplate(asset));
 
       await expect(sut.handleMigrationSingle({ id: asset.id })).resolves.toBe(JobStatus.Skipped);
@@ -124,14 +125,14 @@ describe(StorageTemplateService.name, () => {
     it('should migrate a disk still photo and skip its S3 motion video', async () => {
       const motion = AssetFactory.from({
         type: AssetType.Video,
-        originalPath: 'upload/user/ab/cd/motion.mp4', // relative — on S3
+        originalPath: 's3://default/upload/user/ab/cd/motion.mp4', // on S3
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
       })
         .exif()
         .build();
       const still = AssetFactory.from({
         livePhotoVideoId: motion.id,
-        originalPath: '/data/upload/user/ab/cd/still.jpg', // absolute — on disk
+        originalPath: 'file:///data/upload/user/ab/cd/still.jpg', // on disk
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
       })
         .exif()
@@ -144,13 +145,13 @@ describe(StorageTemplateService.name, () => {
         id: 'move-1',
         entityId: still.id,
         pathType: AssetPathType.Original,
-        oldPath: still.originalPath,
+        oldPath: diskPathOf(still.originalPath)!,
         newPath: `/data/library/${still.ownerId}/2022/2022-06-19/${still.originalFileName}`,
       });
 
       await expect(sut.handleMigrationSingle({ id: still.id })).resolves.toBe(JobStatus.Success);
       expect(mocks.storage.rename).toHaveBeenCalledTimes(1); // only the still
-      expect(mocks.storage.rename).toHaveBeenCalledWith(still.originalPath, expect.any(String));
+      expect(mocks.storage.rename).toHaveBeenCalledWith(diskPathOf(still.originalPath), expect.any(String));
       expect(mocks.move.create).toHaveBeenCalledTimes(1);
     });
 
@@ -181,7 +182,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: stillAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: stillAsset.originalPath,
+        oldPath: diskPathOf(stillAsset.originalPath)!,
         newPath: newStillPicturePath,
       });
 
@@ -189,15 +190,21 @@ describe(StorageTemplateService.name, () => {
         id: '124',
         entityId: motionAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: motionAsset.originalPath,
+        oldPath: diskPathOf(motionAsset.originalPath)!,
         newPath: newMotionPicturePath,
       });
 
       await expect(sut.handleMigrationSingle({ id: stillAsset.id })).resolves.toBe(JobStatus.Success);
 
       expect(mocks.storage.checkFileExists).toHaveBeenCalledTimes(2);
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: stillAsset.id, originalPath: newStillPicturePath });
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: motionAsset.id, originalPath: newMotionPicturePath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: stillAsset.id,
+        originalPath: toStorageUri(DISK, newStillPicturePath),
+      });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: motionAsset.id,
+        originalPath: toStorageUri(DISK, newMotionPicturePath),
+      });
     });
 
     it('should migrate live photo motion video alongside the still image using album in path', async () => {
@@ -234,7 +241,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: stillAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: stillAsset.originalPath,
+        oldPath: diskPathOf(stillAsset.originalPath)!,
         newPath: newStillPicturePath,
       });
 
@@ -242,7 +249,7 @@ describe(StorageTemplateService.name, () => {
         id: '124',
         entityId: motionAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: motionAsset.originalPath,
+        oldPath: diskPathOf(motionAsset.originalPath)!,
         newPath: newMotionPicturePath,
       });
 
@@ -250,8 +257,14 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.storage.checkFileExists).toHaveBeenCalledTimes(2);
       expect(mocks.album.getByAssetId).toHaveBeenCalledWith(stillAsset.ownerId, stillAsset.id);
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: stillAsset.id, originalPath: newStillPicturePath });
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: motionAsset.id, originalPath: newMotionPicturePath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: stillAsset.id,
+        originalPath: toStorageUri(DISK, newStillPicturePath),
+      });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: motionAsset.id,
+        originalPath: toStorageUri(DISK, newMotionPicturePath),
+      });
     });
 
     it('should use handlebar if condition for album', async () => {
@@ -276,7 +289,7 @@ describe(StorageTemplateService.name, () => {
         newPath: expect.stringContaining(
           `/data/library/${user.id}/${asset.fileCreatedAt.getFullYear()}/${album.albumName}/${asset.originalFileName}`,
         ),
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         pathType: AssetPathType.Original,
       });
     });
@@ -299,7 +312,7 @@ describe(StorageTemplateService.name, () => {
         newPath: expect.stringContaining(
           `/data/library/${user.id}/${asset.fileCreatedAt.getFullYear()}/other/${month}/${asset.originalFileName}`,
         ),
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         pathType: AssetPathType.Original,
       });
     });
@@ -337,7 +350,7 @@ describe(StorageTemplateService.name, () => {
         newPath: expect.stringContaining(
           `/data/library/${user.id}/${asset.fileCreatedAt.getFullYear()}/${month} - ${album.albumName}/${asset.originalFileName}`,
         ),
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         pathType: AssetPathType.Original,
       });
     });
@@ -360,7 +373,7 @@ describe(StorageTemplateService.name, () => {
       expect(mocks.move.create).toHaveBeenCalledWith({
         entityId: asset.id,
         newPath: `/data/library/${user.id}/${asset.fileCreatedAt.getFullYear()}/${month}/${asset.originalFileName}`,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         pathType: AssetPathType.Original,
       });
     });
@@ -432,12 +445,14 @@ describe(StorageTemplateService.name, () => {
       const previousFailedNewPath = `/data/library/${user.id}/2023/Feb/${asset.originalFileName}`;
       const newPath = `/data/library/${user.id}/2022/2022-06-19/${asset.originalFileName}`;
 
-      mocks.storage.checkFileExists.mockImplementation((path) => Promise.resolve(path === asset.originalPath));
+      mocks.storage.checkFileExists.mockImplementation((path) =>
+        Promise.resolve(path === diskPathOf(asset.originalPath)),
+      );
       mocks.move.getByEntity.mockResolvedValue({
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath: previousFailedNewPath,
       });
       mocks.assetJob.getForStorageTemplateJob.mockResolvedValue(getForStorageTemplate(asset));
@@ -445,7 +460,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath,
       });
 
@@ -453,15 +468,15 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.getForStorageTemplateJob).toHaveBeenCalledWith(asset.id);
       expect(mocks.storage.checkFileExists).toHaveBeenCalledTimes(3);
-      expect(mocks.storage.rename).toHaveBeenCalledWith(asset.originalPath, newPath);
+      expect(mocks.storage.rename).toHaveBeenCalledWith(diskPathOf(asset.originalPath), newPath);
       expect(mocks.move.update).toHaveBeenCalledWith('123', {
         id: '123',
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         newPath,
       });
       expect(mocks.asset.update).toHaveBeenCalledWith({
         id: asset.id,
-        originalPath: newPath,
+        originalPath: toStorageUri(DISK, newPath),
       });
     });
 
@@ -486,7 +501,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath: previousFailedNewPath,
       });
       mocks.assetJob.getForStorageTemplateJob.mockResolvedValue(getForStorageTemplate(asset));
@@ -506,7 +521,7 @@ describe(StorageTemplateService.name, () => {
       expect(mocks.storage.rename).toHaveBeenCalledWith(previousFailedNewPath, newPath);
       expect(mocks.storage.copyFile).not.toHaveBeenCalled();
       expect(mocks.move.update).toHaveBeenCalledWith('123', { id: '123', oldPath: previousFailedNewPath, newPath });
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: newPath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: toStorageUri(DISK, newPath) });
     });
 
     it('should fail move if copying and hash of asset and the new file do not match', async () => {
@@ -529,7 +544,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath,
       });
 
@@ -541,11 +556,11 @@ describe(StorageTemplateService.name, () => {
       expect(mocks.move.create).toHaveBeenCalledWith({
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath),
         newPath,
       });
-      expect(mocks.storage.rename).toHaveBeenCalledWith(asset.originalPath, newPath);
-      expect(mocks.storage.copyFile).toHaveBeenCalledWith(asset.originalPath, newPath);
+      expect(mocks.storage.rename).toHaveBeenCalledWith(diskPathOf(asset.originalPath), newPath);
+      expect(mocks.storage.copyFile).toHaveBeenCalledWith(diskPathOf(asset.originalPath), newPath);
       expect(mocks.storage.unlink).toHaveBeenCalledWith(newPath);
       expect(mocks.storage.unlink).toHaveBeenCalledTimes(1);
       expect(mocks.asset.update).not.toHaveBeenCalled();
@@ -571,7 +586,7 @@ describe(StorageTemplateService.name, () => {
           id: '123',
           entityId: testAsset.id,
           pathType: AssetPathType.Original,
-          oldPath: testAsset.originalPath,
+          oldPath: diskPathOf(testAsset.originalPath)!,
           newPath: previousFailedNewPath,
         });
         mocks.assetJob.getForStorageTemplateJob.mockResolvedValue(getForStorageTemplate(testAsset));
@@ -610,7 +625,7 @@ describe(StorageTemplateService.name, () => {
       // But the source already has a +7 suffix, meaning it was previously renamed due to duplicates
       const baseFileName = asset.originalFileName.replace('.jpg', '');
       const computedPath = `/data/library/${user.id}/2022/2022-06-19/${baseFileName}`;
-      asset.originalPath = `${computedPath}+7.jpg`;
+      asset.originalPath = `file://${computedPath}+7.jpg`;
 
       mocks.assetJob.getForStorageTemplateJob.mockResolvedValue(getForStorageTemplate(asset));
 
@@ -672,7 +687,7 @@ describe(StorageTemplateService.name, () => {
         .exif()
         .build();
 
-      const oldPath = asset.originalPath;
+      const oldPath = diskPathOf(asset.originalPath)!;
       const newPath = `/data/library/${asset.ownerId}/2022/2022-06-19/${asset.originalFileName}`;
       const newPath2 = newPath.replace('.jpg', '+1.jpg');
 
@@ -693,13 +708,13 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.checkFileExists).toHaveBeenCalledTimes(3); // 2 for duplicate detection + 1 for library folder pre-check
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: newPath2 });
+      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: toStorageUri(DISK, newPath2) });
       expect(mocks.user.getList).toHaveBeenCalled();
     });
 
     it('should skip when an asset already matches the template', async () => {
       const asset = AssetFactory.from({
-        originalPath: '/data/library/user-id/2023/2023-02-23/asset-id.jpg',
+        originalPath: 'file:///data/library/user-id/2023/2023-02-23/asset-id.jpg',
       })
         .exif()
         .build();
@@ -717,7 +732,7 @@ describe(StorageTemplateService.name, () => {
 
     it('should skip when an asset is probably a duplicate', async () => {
       const asset = AssetFactory.from({
-        originalPath: '/data/library/user-id/2023/2023-02-23/asset-id+1.jpg',
+        originalPath: 'file:///data/library/user-id/2023/2023-02-23/asset-id+1.jpg',
       })
         .exif()
         .build();
@@ -734,7 +749,7 @@ describe(StorageTemplateService.name, () => {
     });
 
     it('should skip S3 assets with relative paths during bulk migration', async () => {
-      const asset = AssetFactory.from({ originalPath: 'upload/user/ab/cd/file.jpg' }).exif().build();
+      const asset = AssetFactory.from({ originalPath: 's3://default/upload/user/ab/cd/file.jpg' }).exif().build();
 
       mocks.assetJob.streamForStorageTemplateJob.mockReturnValue(makeStream([getForStorageTemplate(asset)]));
       mocks.user.getList.mockResolvedValue([userStub.user1]);
@@ -755,7 +770,7 @@ describe(StorageTemplateService.name, () => {
         .exif()
         .build();
 
-      const oldPath = asset.originalPath;
+      const oldPath = diskPathOf(asset.originalPath)!;
       const newPath = `/data/library/${asset.ownerId}/2022/2022-06-19/${asset.originalFileName}`;
       mocks.assetJob.streamForStorageTemplateJob.mockReturnValue(makeStream([getForStorageTemplate(asset)]));
       mocks.user.getList.mockResolvedValue([userStub.user1]);
@@ -763,7 +778,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath,
       });
 
@@ -771,7 +786,7 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.rename).toHaveBeenCalledWith(oldPath, newPath);
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: newPath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: toStorageUri(DISK, newPath) });
     });
 
     it('should use the user storage label', async () => {
@@ -789,7 +804,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath: `/data/library/${user.storageLabel}/2023/2023-02-23/${asset.originalFileName}`,
       });
 
@@ -797,7 +812,7 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.rename).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.stringContaining(`/data/library/${user.storageLabel}/2022/2022-06-19/${asset.originalFileName}`),
       );
       expect(mocks.asset.update).toHaveBeenCalledWith({
@@ -811,12 +826,12 @@ describe(StorageTemplateService.name, () => {
     it('should copy the file if rename fails due to EXDEV (rename across filesystems)', async () => {
       const asset = AssetFactory.from({
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
-        originalPath: '/path/to/original.jpg',
+        originalPath: 'file:///path/to/original.jpg',
       })
         .exif({ fileSizeInByte: 5000 })
         .build();
 
-      const oldPath = asset.originalPath;
+      const oldPath = diskPathOf(asset.originalPath)!;
       const newPath = `/data/library/${asset.ownerId}/2022/2022-06-19/${asset.originalFileName}`;
       mocks.assetJob.streamForStorageTemplateJob.mockReturnValue(makeStream([getForStorageTemplate(asset)]));
       mocks.storage.rename.mockRejectedValue({ code: 'EXDEV' });
@@ -852,7 +867,7 @@ describe(StorageTemplateService.name, () => {
       expect(mocks.storage.utimes).toHaveBeenCalledWith(newPath, expect.any(Date), expect.any(Date));
       expect(mocks.storage.unlink).toHaveBeenCalledWith(oldPath);
       expect(mocks.storage.unlink).toHaveBeenCalledTimes(1);
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: newPath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({ id: asset.id, originalPath: toStorageUri(DISK, newPath) });
     });
 
     it('should not update the database if the move fails due to incorrect newPath filesize', async () => {
@@ -871,7 +886,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath: `/data/library/user-id/2022/2022-06-19/${asset.originalFileName}`,
       });
       mocks.storage.stat.mockResolvedValue({
@@ -882,11 +897,11 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.rename).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.stringContaining(`/data/library/${user.id}/2022/2022-06-19/${asset.originalFileName}`),
       );
       expect(mocks.storage.copyFile).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.stringContaining(`/data/library/${user.id}/2022/2022-06-19/${asset.originalFileName}`),
       );
       expect(mocks.storage.stat).toHaveBeenCalledWith(
@@ -911,7 +926,7 @@ describe(StorageTemplateService.name, () => {
         id: 'move-123',
         entityId: asset.id,
         pathType: AssetPathType.Original,
-        oldPath: asset.originalPath,
+        oldPath: diskPathOf(asset.originalPath)!,
         newPath: '',
       });
       mocks.user.getList.mockResolvedValue([user]);
@@ -920,7 +935,7 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.rename).toHaveBeenCalledWith(
-        asset.originalPath,
+        diskPathOf(asset.originalPath),
         expect.stringContaining(`/data/library/${user.id}/2022/2022-06-19/${asset.originalFileName}`),
       );
       expect(mocks.asset.update).not.toHaveBeenCalled();
@@ -958,7 +973,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: stillAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: stillAsset.originalPath,
+        oldPath: diskPathOf(stillAsset.originalPath)!,
         newPath: newStillPicturePath,
       });
 
@@ -966,7 +981,7 @@ describe(StorageTemplateService.name, () => {
         id: '124',
         entityId: motionAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: motionAsset.originalPath,
+        oldPath: diskPathOf(motionAsset.originalPath)!,
         newPath: newMotionPicturePath,
       });
 
@@ -974,8 +989,14 @@ describe(StorageTemplateService.name, () => {
 
       expect(mocks.assetJob.streamForStorageTemplateJob).toHaveBeenCalled();
       expect(mocks.storage.checkFileExists).toHaveBeenCalledTimes(3); // 2 for path lookups + 1 for library folder pre-check
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: stillAsset.id, originalPath: newStillPicturePath });
-      expect(mocks.asset.update).toHaveBeenCalledWith({ id: motionAsset.id, originalPath: newMotionPicturePath });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: stillAsset.id,
+        originalPath: toStorageUri(DISK, newStillPicturePath),
+      });
+      expect(mocks.asset.update).toHaveBeenCalledWith({
+        id: motionAsset.id,
+        originalPath: toStorageUri(DISK, newMotionPicturePath),
+      });
     });
 
     it('should use still photo album info when migrating live photo motion video', async () => {
@@ -997,7 +1018,7 @@ describe(StorageTemplateService.name, () => {
         id: '123',
         entityId: stillAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: stillAsset.originalPath,
+        oldPath: diskPathOf(stillAsset.originalPath)!,
         newPath: `/data/library/${user.id}/2022/${album.albumName}/${stillAsset.originalFileName}`,
       });
 
@@ -1005,7 +1026,7 @@ describe(StorageTemplateService.name, () => {
         id: '124',
         entityId: motionAsset.id,
         pathType: AssetPathType.Original,
-        oldPath: motionAsset.originalPath,
+        oldPath: diskPathOf(motionAsset.originalPath)!,
         newPath: `/data/library/${user.id}/2022/${album.albumName}/${motionAsset.originalFileName}`,
       });
 
@@ -1029,7 +1050,7 @@ describe(StorageTemplateService.name, () => {
       const user = UserFactory.create({ storageLabel: 'label-1' });
       const asset = AssetFactory.from({
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
-        originalPath: `/data/library/${user.id}/2022/2022-06-19/IMG_7065.heic`,
+        originalPath: `file:///data/library/${user.id}/2022/2022-06-19/IMG_7065.heic`,
         originalFileName: 'IMG_7065.HEIC',
       })
         .owner(user)
@@ -1059,7 +1080,7 @@ describe(StorageTemplateService.name, () => {
       const user = UserFactory.create();
       const asset = AssetFactory.from({
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
-        originalPath: `/data/library/${user.id}/2022/2022-06-19/IMG_7065.HEIC`,
+        originalPath: `file:///data/library/${user.id}/2022/2022-06-19/IMG_7065.HEIC`,
         originalFileName: 'IMG_7065.HEIC',
       })
         .owner(user)
@@ -1089,7 +1110,7 @@ describe(StorageTemplateService.name, () => {
       const user = UserFactory.create();
       const asset = AssetFactory.from({
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
-        originalPath: `/data/library/${user.id}/2022/2022-06-19/IMG_7065.JPEG`,
+        originalPath: `file:///data/library/${user.id}/2022/2022-06-19/IMG_7065.JPEG`,
         originalFileName: 'IMG_7065.JPEG',
       })
         .owner(user)
@@ -1119,7 +1140,7 @@ describe(StorageTemplateService.name, () => {
       const user = UserFactory.create();
       const asset = AssetFactory.from({
         fileCreatedAt: new Date('2022-06-19T23:41:36.910Z'),
-        originalPath: '/data/library/user-id/2022/2022-06-19/IMG_7065.JPG',
+        originalPath: 'file:///data/library/user-id/2022/2022-06-19/IMG_7065.JPG',
         originalFileName: 'IMG_7065.JPG',
       })
         .owner(user)

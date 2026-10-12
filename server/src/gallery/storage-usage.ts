@@ -40,7 +40,7 @@ type PhysicalUsageDeps = {
   user: Pick<UserAdmin, 'id' | 'storageLabel'>;
   assetRepository: AssetRepository;
   storageRepository: StorageRepository;
-  s3: StorageBackend | undefined;
+  s3Backends: StorageBackend[];
 };
 
 /**
@@ -53,7 +53,7 @@ export const computePhysicalUsage = async ({
   user,
   assetRepository,
   storageRepository,
-  s3,
+  s3Backends,
 }: PhysicalUsageDeps): Promise<number> => {
   const externalAssetIds = await assetRepository.getExternalAssetIds(user.id);
   const shouldCount = (filename: string) => {
@@ -71,7 +71,7 @@ export const computePhysicalUsage = async ({
   ]);
   let total = disk.reduce((total, value) => total + value, 0);
 
-  if (s3) {
+  for (const s3 of s3Backends) {
     const remote = await Promise.all([
       s3.getPrefixUsage(`${StorageFolder.Upload}/${user.id}/`),
       s3.getPrefixUsage(`${StorageFolder.Profile}/${user.id}/`),

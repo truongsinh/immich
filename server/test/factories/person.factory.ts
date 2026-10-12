@@ -24,7 +24,7 @@ export class PersonFactory {
       sharedWith: [],
       ownerId: newUuid(),
       species: null,
-      thumbnailPath: '/data/thumbs/person-thumbnail.jpg',
+      thumbnailPath: 'file:///data/thumbs/person-thumbnail.jpg',
       type: 'person',
       updatedAt: newDate(),
       updateId: newUuidV7(),

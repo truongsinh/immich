@@ -1,13 +1,14 @@
+import { parseStoredPath } from 'src/backends/storage-backend.provider.js';
 import { LoggingRepository } from 'src/repositories/logging.repository.js';
 import { MachineLearningRepository, ModelTask, ModelType } from 'src/repositories/machine-learning.repository.js';
 import { automock } from 'test/utils.js';
 
 const mockReadAll = vi.fn();
-const mockResolveBackendForKey = vi.fn(() => ({ readAll: mockReadAll }));
+const mockResolve = vi.fn((path: string) => ({ backend: { readAll: mockReadAll }, key: parseStoredPath(path).key }));
 
 vi.mock('src/services/storage.service', () => ({
   StorageService: {
-    resolveBackendForKey: (...args: unknown[]) => mockResolveBackendForKey(...(args as [])),
+    resolve: (path: string) => mockResolve(path),
   },
 }));
 
@@ -91,9 +92,9 @@ describe(MachineLearningRepository.name, () => {
       const clipResponse = { [ModelTask.SEARCH]: 'mock-embedding', imageHeight: 100, imageWidth: 100 };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(clipResponse) });
 
-      await sut.encodeImage('thumbs/user1/ab/cd/preview.webp', clipConfig);
+      await sut.encodeImage('s3://default/thumbs/user1/ab/cd/preview.webp', clipConfig);
 
-      expect(mockResolveBackendForKey).toHaveBeenCalledWith('thumbs/user1/ab/cd/preview.webp');
+      expect(mockResolve).toHaveBeenCalledWith('s3://default/thumbs/user1/ab/cd/preview.webp');
       expect(mockReadAll).toHaveBeenCalledWith('thumbs/user1/ab/cd/preview.webp');
     });
 
@@ -104,7 +105,7 @@ describe(MachineLearningRepository.name, () => {
       const clipResponse = { [ModelTask.SEARCH]: 'mock-embedding', imageHeight: 100, imageWidth: 100 };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(clipResponse) });
 
-      await sut.encodeImage('thumbs/user1/preview.webp', clipConfig);
+      await sut.encodeImage('s3://default/thumbs/user1/preview.webp', clipConfig);
 
       // Verify fetch was called with FormData containing the image data
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -143,7 +144,7 @@ describe(MachineLearningRepository.name, () => {
       const clipResponse = { [ModelTask.SEARCH]: 'encoded-embedding-string', imageHeight: 200, imageWidth: 300 };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(clipResponse) });
 
-      const result = await sut.encodeImage('upload/user1/ab/cd/preview.webp', clipConfig);
+      const result = await sut.encodeImage('s3://default/upload/user1/ab/cd/preview.webp', clipConfig);
 
       expect(result).toBe('encoded-embedding-string');
 
@@ -160,7 +161,7 @@ describe(MachineLearningRepository.name, () => {
       const clipResponse = { [ModelTask.SEARCH]: 'disk-embedding', imageHeight: 100, imageWidth: 100 };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(clipResponse) });
 
-      const result = await sut.encodeImage('/data/upload/preview.webp', clipConfig);
+      const result = await sut.encodeImage('file:///data/upload/preview.webp', clipConfig);
 
       expect(result).toBe('disk-embedding');
       expect(mockReadAll).toHaveBeenCalledWith('/data/upload/preview.webp');
@@ -181,7 +182,7 @@ describe(MachineLearningRepository.name, () => {
       };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(faceResponse) });
 
-      const result = await sut.detectFaces('thumbs/user1/face-preview.webp', {
+      const result = await sut.detectFaces('s3://default/thumbs/user1/face-preview.webp', {
         modelName: 'buffalo_l',
         minScore: 0.7,
       });
@@ -191,7 +192,7 @@ describe(MachineLearningRepository.name, () => {
       expect(result.imageHeight).toBe(480);
       expect(result.imageWidth).toBe(640);
 
-      expect(mockResolveBackendForKey).toHaveBeenCalledWith('thumbs/user1/face-preview.webp');
+      expect(mockResolve).toHaveBeenCalledWith('s3://default/thumbs/user1/face-preview.webp');
       expect(mockReadAll).toHaveBeenCalledWith('thumbs/user1/face-preview.webp');
 
       const [, options] = mockFetch.mock.calls[0];
@@ -218,7 +219,7 @@ describe(MachineLearningRepository.name, () => {
       };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(faceResponse) });
 
-      const result = await sut.detectFaces('/data/upload/thumbs/preview.webp', {
+      const result = await sut.detectFaces('file:///data/upload/thumbs/preview.webp', {
         modelName: 'buffalo_l',
         minScore: 0.7,
       });
@@ -244,7 +245,7 @@ describe(MachineLearningRepository.name, () => {
       };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(petResponse) });
 
-      await sut.detectPets('/data/upload/preview.webp', { modelName: 'yolo11s', minScore: 0.6 });
+      await sut.detectPets('file:///data/upload/preview.webp', { modelName: 'yolo11s', minScore: 0.6 });
 
       const [, options] = mockFetch.mock.calls[0];
       const formData = options.body as FormData;
@@ -276,7 +277,7 @@ describe(MachineLearningRepository.name, () => {
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(petResponse) });
 
       await sut.detectPets(
-        '/data/upload/preview.webp',
+        'file:///data/upload/preview.webp',
         { modelName: 'yolo11s', minScore: 0.6 },
         { modelName: 'pet-recognition-base' },
       );
@@ -311,7 +312,7 @@ describe(MachineLearningRepository.name, () => {
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(petResponse) });
 
       const result = await sut.detectPets(
-        '/data/upload/preview.webp',
+        'file:///data/upload/preview.webp',
         { modelName: 'yolo11s', minScore: 0.6 },
         { modelName: 'pet-recognition-base' },
       );
@@ -333,7 +334,7 @@ describe(MachineLearningRepository.name, () => {
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(petResponse) });
 
       const result = await sut.detectPets(
-        '/data/upload/preview.webp',
+        'file:///data/upload/preview.webp',
         { modelName: 'yolo11s', minScore: 0.6 },
         { modelName: 'pet-recognition-base' },
       );
@@ -351,7 +352,7 @@ describe(MachineLearningRepository.name, () => {
       const petResponse = { imageHeight: 480, imageWidth: 640 };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(petResponse) });
 
-      const result = await sut.detectPets('/data/upload/preview.webp', { modelName: 'yolo11s', minScore: 0.6 });
+      const result = await sut.detectPets('file:///data/upload/preview.webp', { modelName: 'yolo11s', minScore: 0.6 });
 
       expect(result.pets).toEqual([]);
     });
@@ -369,7 +370,7 @@ describe(MachineLearningRepository.name, () => {
       };
       mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(ocrResponse) });
 
-      const result = await sut.ocr('upload/user1/preview.webp', {
+      const result = await sut.ocr('s3://default/upload/user1/preview.webp', {
         modelName: 'default-ocr',
         minDetectionScore: 0.5,
         minRecognitionScore: 0.5,
@@ -377,7 +378,7 @@ describe(MachineLearningRepository.name, () => {
       });
 
       expect(result.text).toEqual(['hello']);
-      expect(mockResolveBackendForKey).toHaveBeenCalledWith('upload/user1/preview.webp');
+      expect(mockResolve).toHaveBeenCalledWith('s3://default/upload/user1/preview.webp');
       expect(mockReadAll).toHaveBeenCalledWith('upload/user1/preview.webp');
     });
   });
@@ -389,7 +390,9 @@ describe(MachineLearningRepository.name, () => {
 
       mockFetch.mockRejectedValue(new Error('Connection refused'));
 
-      await expect(sut.encodeImage('/data/upload/preview.webp', clipConfig)).rejects.toThrow('failed for all URLs');
+      await expect(sut.encodeImage('file:///data/upload/preview.webp', clipConfig)).rejects.toThrow(
+        'failed for all URLs',
+      );
     });
 
     it('should throw when all ML server URLs fail with S3 path', async () => {
@@ -398,7 +401,9 @@ describe(MachineLearningRepository.name, () => {
 
       mockFetch.mockRejectedValue(new Error('Connection refused'));
 
-      await expect(sut.encodeImage('thumbs/user1/preview.webp', clipConfig)).rejects.toThrow('failed for all URLs');
+      await expect(sut.encodeImage('s3://default/thumbs/user1/preview.webp', clipConfig)).rejects.toThrow(
+        'failed for all URLs',
+      );
 
       expect(mockReadAll).toHaveBeenCalledWith('thumbs/user1/preview.webp');
     });
@@ -515,7 +520,7 @@ describe(MachineLearningRepository.name, () => {
         });
       });
       mockReadAll.mockResolvedValue(Buffer.from('img'));
-      await sut.encodeImage('/data/upload/thumbs/a/b/c.webp', clipConfig);
+      await sut.encodeImage('file:///data/upload/thumbs/a/b/c.webp', clipConfig);
       expect(signalsUsed[0]).toBeUndefined();
     });
   });

@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, UnauthorizedException } from '
 import { DateTime } from 'luxon';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { type AssetResponseDto, mapAsset } from 'src/dtos/asset-response.dto.js';
 import { AssetJobName, AssetStatsResponseDto } from 'src/dtos/asset.dto.js';
 import { AssetEditAction, AssetEditsCreateDto } from 'src/dtos/editing.dto.js';
@@ -255,7 +256,7 @@ describe(AssetService.name, () => {
           f.person({
             personGroupId: 'person-1',
             name: 'Global Person',
-            thumbnailPath: '/global-person-thumb.jpg',
+            thumbnailPath: 'file:///global-person-thumb.jpg',
             birthDate: '1980-01-01' as any,
           }),
         )
@@ -1955,7 +1956,7 @@ describe(AssetService.name, () => {
       await sut.handleAssetDeletion({ id: asset.id, deleteOnDisk: true });
 
       expect(mocks.job.queue.mock.calls).toEqual([
-        [{ name: JobName.FileDelete, data: { files: [`/data/library/IMG_${asset.id}.jpg`] } }],
+        [{ name: JobName.FileDelete, data: { files: [`file:///data/library/IMG_${asset.id}.jpg`] } }],
       ]);
     });
 
@@ -2310,7 +2311,7 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       });
 
       await expect(sut.copy(authStub.admin, { sourceId, targetId })).rejects.toBeInstanceOf(BadRequestException);
@@ -2319,7 +2320,13 @@ describe(AssetService.name, () => {
     it('should throw if source and target are the same', async () => {
       const assetId = newUuid();
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([assetId]));
-      const assetData = { id: assetId, stackId: null, isFavorite: false, files: [], originalPath: '/data/img.jpg' };
+      const assetData = {
+        id: assetId,
+        stackId: null,
+        isFavorite: false,
+        files: [],
+        originalPath: 'file:///data/img.jpg',
+      };
       mocks.asset.getForCopy.mockResolvedValueOnce(assetData);
       mocks.asset.getForCopy.mockResolvedValueOnce(assetData);
 
@@ -2336,14 +2343,14 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: true,
         files: [],
-        originalPath: '/data/source.jpg',
+        originalPath: 'file:///data/source.jpg',
       };
       const targetAsset = {
         id: targetId,
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([sourceId, targetId]));
@@ -2377,14 +2384,14 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/source.jpg',
+        originalPath: 'file:///data/source.jpg',
       };
       const targetAsset = {
         id: targetId,
         stackId: null,
         isFavorite: true,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([sourceId, targetId]));
@@ -2406,14 +2413,14 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/source.jpg',
+        originalPath: 'file:///data/source.jpg',
       };
       const targetAsset = {
         id: targetId,
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([sourceId, targetId]));
@@ -2434,14 +2441,14 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/source.jpg',
+        originalPath: 'file:///data/source.jpg',
       };
       const targetAsset = {
         id: targetId,
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([sourceId, targetId]));
@@ -2461,14 +2468,14 @@ describe(AssetService.name, () => {
         stackId: null,
         isFavorite: true,
         files: [],
-        originalPath: '/data/source.jpg',
+        originalPath: 'file:///data/source.jpg',
       };
       const targetAsset = {
         id: targetId,
         stackId: null,
         isFavorite: false,
         files: [],
-        originalPath: '/data/target.jpg',
+        originalPath: 'file:///data/target.jpg',
       };
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([sourceId, targetId]));
@@ -2484,35 +2491,42 @@ describe(AssetService.name, () => {
   });
 
   describe('copySidecar', () => {
-    const diskSource = { path: '/usr/src/app/upload/user/src.jpg.xmp', type: AssetFileType.Sidecar, isEdited: false };
-    const s3Source = { path: 'upload/user/src.jpg.xmp', type: AssetFileType.Sidecar, isEdited: false };
-    const diskTargetAsset = { id: 'target-id', originalPath: '/usr/src/app/upload/user/dst.jpg', files: [] };
-    const s3TargetAsset = { id: 'target-id', originalPath: 'upload/user/dst.jpg', files: [] };
+    const diskSource = {
+      path: 'file:///usr/src/app/upload/user/src.jpg.xmp',
+      type: AssetFileType.Sidecar,
+      isEdited: false,
+    };
+    const s3Source = { path: 's3://default/upload/user/src.jpg.xmp', type: AssetFileType.Sidecar, isEdited: false };
+    const diskTargetAsset = { id: 'target-id', originalPath: 'file:///usr/src/app/upload/user/dst.jpg', files: [] };
+    const s3TargetAsset = { id: 'target-id', originalPath: 's3://default/upload/user/dst.jpg', files: [] };
     let cleanupSpy: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
       cleanupSpy = vi.fn().mockResolvedValue(void 0);
       vi.spyOn(sut as any, 'ensureLocalFile').mockImplementation(((p: string) =>
         Promise.resolve({
-          localPath: p.startsWith('/') ? p : `/tmp/dl-${path.basename(p)}`,
-          cleanup: p.startsWith('/') ? async () => {} : cleanupSpy,
+          localPath: diskPathOf(p) ?? `/tmp/dl-${path.basename(p)}`,
+          cleanup: diskPathOf(p) ? async () => {} : cleanupSpy,
         })) as any);
       mocks.storage.createPlainReadStream.mockReturnValue(Readable.from(['<xml/>']));
     });
 
     it('disk → disk: copies via storageRepository.copyFile (regression guard)', async () => {
       await (sut as any).copySidecar({ sourceAsset: { files: [diskSource] }, targetAsset: diskTargetAsset });
-      expect(mocks.storage.copyFile).toHaveBeenCalledWith(diskSource.path, `${diskTargetAsset.originalPath}.xmp`);
+      expect(mocks.storage.copyFile).toHaveBeenCalledWith(
+        diskPathOf(diskSource.path),
+        diskPathOf(`${diskTargetAsset.originalPath}.xmp`),
+      );
     });
 
     it('disk → S3: uploads via backend.put', async () => {
       const backendPut = vi.fn().mockResolvedValue(void 0);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       await (sut as any).copySidecar({ sourceAsset: { files: [diskSource] }, targetAsset: s3TargetAsset });
 
-      expect(backendPut).toHaveBeenCalledWith(`${s3TargetAsset.originalPath}.xmp`, expect.anything(), {
+      expect(backendPut).toHaveBeenCalledWith('upload/user/dst.jpg.xmp', expect.anything(), {
         contentType: 'application/xml',
       });
     });
@@ -2521,7 +2535,7 @@ describe(AssetService.name, () => {
       await (sut as any).copySidecar({ sourceAsset: { files: [s3Source] }, targetAsset: diskTargetAsset });
       expect(mocks.storage.copyFile).toHaveBeenCalledWith(
         `/tmp/dl-${path.basename(s3Source.path)}`,
-        `${diskTargetAsset.originalPath}.xmp`,
+        diskPathOf(`${diskTargetAsset.originalPath}.xmp`),
       );
       expect(cleanupSpy).toHaveBeenCalledOnce();
     });
@@ -2529,7 +2543,7 @@ describe(AssetService.name, () => {
     it('S3 → S3: downloads source then uploads to target', async () => {
       const backendPut = vi.fn().mockResolvedValue(void 0);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       await (sut as any).copySidecar({ sourceAsset: { files: [s3Source] }, targetAsset: s3TargetAsset });
 
@@ -2545,7 +2559,7 @@ describe(AssetService.name, () => {
       const target = { ...s3TargetAsset, files: [existingTarget] };
       const backendPut = vi.fn().mockResolvedValue(void 0);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       const sourceStream = Readable.from(['<xml/>']);
       mocks.storage.createPlainReadStream.mockReturnValue(sourceStream);
@@ -2565,7 +2579,7 @@ describe(AssetService.name, () => {
     it('succeeds when target has no existing sidecar (files: []) — disk→S3 variant', async () => {
       const backendPut = vi.fn().mockResolvedValue(void 0);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       await (sut as any).copySidecar({
         sourceAsset: { files: [diskSource] },
@@ -2578,7 +2592,7 @@ describe(AssetService.name, () => {
     it('succeeds when targetAsset.files is undefined (not just empty)', async () => {
       const backendPut = vi.fn().mockResolvedValue(void 0);
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       await (sut as any).copySidecar({
         sourceAsset: { files: [s3Source] },
@@ -2602,7 +2616,7 @@ describe(AssetService.name, () => {
     it('calls cleanup when backend.put fails', async () => {
       const backendPut = vi.fn().mockRejectedValue(new Error('S3 down'));
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ put: backendPut } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { put: backendPut }]]) as any);
 
       await expect(
         (sut as any).copySidecar({ sourceAsset: { files: [s3Source] }, targetAsset: s3TargetAsset }),
@@ -2684,7 +2698,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/video.mp4',
+        originalPath: 'file:///data/video.mp4',
         originalFileName: 'video.mp4',
         duration: null,
         exifImageWidth: 1920,
@@ -2706,7 +2720,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: newUuid(),
-        originalPath: '/data/image.jpg',
+        originalPath: 'file:///data/image.jpg',
         originalFileName: 'image.jpg',
         duration: null,
         exifImageWidth: 1920,
@@ -2728,7 +2742,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/pano.jpg',
+        originalPath: 'file:///data/pano.jpg',
         originalFileName: 'pano.jpg',
         duration: null,
         exifImageWidth: 1920,
@@ -2750,7 +2764,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.gif',
+        originalPath: 'file:///data/image.gif',
         originalFileName: 'image.gif',
         duration: null,
         exifImageWidth: 1920,
@@ -2772,7 +2786,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.svg',
+        originalPath: 'file:///data/image.svg',
         originalFileName: 'image.svg',
         duration: null,
         exifImageWidth: 1920,
@@ -2794,7 +2808,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.jpg',
+        originalPath: 'file:///data/image.jpg',
         originalFileName: 'image.jpg',
         duration: null,
         exifImageWidth: null,
@@ -2816,7 +2830,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.jpg',
+        originalPath: 'file:///data/image.jpg',
         originalFileName: 'image.jpg',
         duration: null,
         exifImageWidth: 100,
@@ -2839,7 +2853,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.jpg',
+        originalPath: 'file:///data/image.jpg',
         originalFileName: 'image.jpg',
         duration: null,
         exifImageWidth: 1920,
@@ -2872,7 +2886,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/image.jpg',
+        originalPath: 'file:///data/image.jpg',
         originalFileName: 'image.jpg',
         duration: null,
         exifImageWidth: 100,
@@ -2894,7 +2908,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -2923,7 +2937,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 10_000,
         exifImageWidth: 1920,
@@ -2960,7 +2974,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Image,
         livePhotoVideoId: null,
-        originalPath: '/data/library/photo.jpg',
+        originalPath: 'file:///data/library/photo.jpg',
         originalFileName: 'photo.jpg',
         duration: null,
         exifImageWidth: 1920,
@@ -2983,7 +2997,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3010,7 +3024,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3033,13 +3047,13 @@ describe(AssetService.name, () => {
       const assetId = newUuid();
       const getReadableUrl = vi.fn().mockResolvedValue('https://bucket.s3/key?X-Amz-Signature=abc');
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ getReadableUrl } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { getReadableUrl }]]) as any);
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([assetId]));
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: 'upload/admin/ab/cd/video.mp4',
+        originalPath: 's3://default/upload/admin/ab/cd/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3074,13 +3088,13 @@ describe(AssetService.name, () => {
       const assetId = newUuid();
       const getReadableUrl = vi.fn().mockResolvedValue('https://bucket.s3/key?X-Amz-Signature=SECRET');
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ getReadableUrl } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { getReadableUrl }]]) as any);
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([assetId]));
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: 'upload/admin/ab/cd/video.mp4',
+        originalPath: 's3://default/upload/admin/ab/cd/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3110,7 +3124,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/mnt/external/video.mp4',
+        originalPath: 'file:///mnt/external/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3130,13 +3144,13 @@ describe(AssetService.name, () => {
       const assetId = newUuid();
       const getReadableUrl = vi.fn().mockResolvedValue('https://bucket.s3/key?X-Amz-Signature=abc');
       const { StorageService } = await import('src/services/storage.service.js');
-      vi.spyOn(StorageService, 'resolveBackendForKey').mockReturnValue({ getReadableUrl } as any);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { getReadableUrl }]]) as any);
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([assetId]));
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: 'upload/admin/ab/cd/audio.m4a',
+        originalPath: 's3://default/upload/admin/ab/cd/audio.m4a',
         originalFileName: 'audio.m4a',
         duration: 180_000,
         exifImageWidth: null,
@@ -3159,13 +3173,14 @@ describe(AssetService.name, () => {
     it('should probe disk-backed videos by absolute path, without presigning', async () => {
       const assetId = newUuid();
       const { StorageService } = await import('src/services/storage.service.js');
-      const resolveSpy = vi.spyOn(StorageService, 'resolveBackendForKey');
+      const getReadableUrl = vi.fn();
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['default', { getReadableUrl }]]) as any);
 
       mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([assetId]));
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3182,7 +3197,7 @@ describe(AssetService.name, () => {
       });
 
       expect(mocks.media.probe).toHaveBeenCalledWith('/data/library/video.mp4');
-      expect(resolveSpy).not.toHaveBeenCalled();
+      expect(getReadableUrl).not.toHaveBeenCalled();
 
       vi.restoreAllMocks();
     });
@@ -3193,7 +3208,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/audio.mp3',
+        originalPath: 'file:///data/library/audio.mp3',
         originalFileName: 'audio.mp3',
         duration: 180_000,
         exifImageWidth: null,
@@ -3221,7 +3236,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 1500,
         exifImageWidth: 1920,
@@ -3249,7 +3264,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 30_000,
         exifImageWidth: 1920,
@@ -3284,7 +3299,7 @@ describe(AssetService.name, () => {
       mocks.asset.getForEdit.mockResolvedValue({
         type: AssetType.Video,
         livePhotoVideoId: null,
-        originalPath: '/data/library/video.mp4',
+        originalPath: 'file:///data/library/video.mp4',
         originalFileName: 'video.mp4',
         duration: 10_000,
         exifImageWidth: 1920,

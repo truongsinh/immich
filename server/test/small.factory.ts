@@ -291,12 +291,12 @@ const assetSidecarWriteFactory = () => {
   const id = newUuid();
   return {
     id,
-    originalPath: '/path/to/original-path.jpg.xmp',
+    originalPath: 'file:///path/to/original-path.jpg.xmp',
     tags: [],
     files: [
       {
         id: newUuid(),
-        path: '/path/to/original-path.jpg.xmp',
+        path: 'file:///path/to/original-path.jpg.xmp',
         type: AssetFileType.Sidecar,
         isEdited: false,
       },
@@ -390,7 +390,7 @@ const personFactory = (person?: Partial<Person>): Person => ({
   name: 'person',
   ownerId: newUuid(),
   species: null,
-  thumbnailPath: '/path/to/person/thumbnail.jpg',
+  thumbnailPath: 'file:///path/to/person/thumbnail.jpg',
   type: 'person',
   updatedAt: newDate(),
   updateId: newUuidV7(),

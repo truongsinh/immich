@@ -20,7 +20,11 @@ describe('video metadata extraction', () => {
     const ctx = new ExifTestContext(database);
     const { user } = await ctx.newUser();
     const originalPath = resolve(testAssetsDir, 'videos', path);
-    const { asset } = await ctx.newAsset({ ownerId: user.id, originalPath, type: AssetType.Video });
+    const { asset } = await ctx.newAsset({
+      ownerId: user.id,
+      originalPath: `file://${originalPath}`,
+      type: AssetType.Video,
+    });
 
     await ctx.sut.handleMetadataExtraction({ id: asset.id });
 

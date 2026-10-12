@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { SystemConfig } from 'src/dtos/config.dto.js';
+import { DISK, diskPathOf, toStorageUri } from 'src/backends/storage-backend.provider.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { AssetStatus, JobName, JobStatus } from 'src/enum.js';
 import { AssetJobRepository } from 'src/repositories/asset-job.repository.js';
@@ -111,7 +112,7 @@ class LibraryTestContext extends MediumTestContext<typeof LibraryService> {
       .where('deletedAt', 'is', null)
       .execute();
 
-    return assets.map(({ originalPath }) => originalPath).sort();
+    return assets.map(({ originalPath }) => diskPathOf(originalPath)!).sort();
   }
 }
 
@@ -516,12 +517,16 @@ describe(LibraryService.name, () => {
           .selectFrom('asset')
           .select(['originalPath', 'isOffline', 'deletedAt'])
           .where('libraryId', '=', library.id)
-          .where('originalPath', 'in', excludedAssets)
+          .where(
+            'originalPath',
+            'in',
+            excludedAssets.map((path) => toStorageUri(DISK, path)),
+          )
           .orderBy('originalPath')
           .execute();
         expect(excluded).toEqual(
-          excludedAssets.sort().map((originalPath) => ({
-            originalPath,
+          excludedAssets.sort().map((path) => ({
+            originalPath: toStorageUri(DISK, path),
             isOffline: true,
             deletedAt: expect.any(Date),
           })),
@@ -612,7 +617,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(outsidePath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(outsidePath, 'offline.png'))),
         isExternal: true,
         isOffline: false,
         status: AssetStatus.Active,
@@ -636,7 +641,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(excludedPath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(excludedPath, 'offline.png'))),
         isExternal: true,
         isOffline: false,
         status: AssetStatus.Active,
@@ -659,7 +664,7 @@ describe(LibraryService.name, () => {
         ownerId: library.ownerId,
         libraryId: library.id,
         // the file is intentionally never created on disk
-        originalPath: join(importPath, 'offline.png'),
+        originalPath: toStorageUri(DISK, join(importPath, 'offline.png')),
         isExternal: true,
         isOffline: false,
         status: AssetStatus.Active,
@@ -692,7 +697,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(importPath, 'online.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(importPath, 'online.png'))),
         fileModifiedAt,
         isExternal: true,
         isOffline: false,
@@ -722,7 +727,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(importPath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(importPath, 'offline.png'))),
         isExternal: true,
         isOffline: true,
         deletedAt: new Date(),
@@ -756,7 +761,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(excludedPath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(excludedPath, 'offline.png'))),
         isExternal: true,
         isOffline: true,
         deletedAt: new Date(),
@@ -786,7 +791,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(outsidePath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(outsidePath, 'offline.png'))),
         isExternal: true,
         isOffline: true,
         deletedAt: new Date(),
@@ -817,7 +822,7 @@ describe(LibraryService.name, () => {
         ownerId: library.ownerId,
         libraryId: library.id,
         // the file is intentionally never created on disk
-        originalPath: join(importPath, 'offline.png'),
+        originalPath: toStorageUri(DISK, join(importPath, 'offline.png')),
         isExternal: true,
         isOffline: false,
         deletedAt: new Date(),
@@ -847,7 +852,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: await createFile(join(importPath, 'offline.png')),
+        originalPath: toStorageUri(DISK, await createFile(join(importPath, 'offline.png'))),
         isExternal: true,
         isOffline: true,
         deletedAt: new Date(),
@@ -879,7 +884,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: rawPath,
+        originalPath: toStorageUri(DISK, rawPath),
         // the file on disk has a newer modified time
         fileModifiedAt: new Date(fileModifiedAt.valueOf() - 1000),
         isExternal: true,
@@ -915,7 +920,7 @@ describe(LibraryService.name, () => {
       const { asset } = await ctx.newAsset({
         ownerId: library.ownerId,
         libraryId: library.id,
-        originalPath: rawPath,
+        originalPath: toStorageUri(DISK, rawPath),
         fileModifiedAt,
         isExternal: true,
         isOffline: false,

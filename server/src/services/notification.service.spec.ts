@@ -1,3 +1,4 @@
+import { diskPathOf } from 'src/backends/storage-backend.provider.js';
 import { AdminConfigDto, SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { AssetFileType, JobName, JobStatus, UserMetadataKey } from 'src/enum.js';
 import { NotificationService } from 'src/services/notification.service.js';
@@ -854,7 +855,9 @@ describe(NotificationService.name, () => {
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.SendMail,
         data: expect.objectContaining({
-          imageAttachments: [{ filename: 'album-thumbnail.jpg', path: editedFile.path, cid: 'album-thumbnail' }],
+          imageAttachments: [
+            { filename: 'album-thumbnail.jpg', path: diskPathOf(editedFile.path), cid: 'album-thumbnail' },
+          ],
         }),
       });
     });

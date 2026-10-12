@@ -281,13 +281,13 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/original/preview.jpg',
+        path: 'file:///original/preview.jpg',
         isEdited: false,
       });
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/edited/preview.jpg',
+        path: 'file:///edited/preview.jpg',
         isEdited: true,
       });
 
@@ -308,13 +308,13 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/original/preview.jpg',
+        path: 'file:///original/preview.jpg',
         isEdited: false,
       });
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/edited/preview.jpg',
+        path: 'file:///edited/preview.jpg',
         isEdited: true,
       });
 
@@ -335,13 +335,13 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/original/preview.jpg',
+        path: 'file:///original/preview.jpg',
         isEdited: false,
       });
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/edited/preview.jpg',
+        path: 'file:///edited/preview.jpg',
         isEdited: true,
       });
 
@@ -362,7 +362,7 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/original/preview.jpg',
+        path: 'file:///original/preview.jpg',
         isEdited: false,
       });
 
@@ -383,7 +383,7 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Preview,
-        path: '/original/preview.jpg',
+        path: 'file:///original/preview.jpg',
         isEdited: false,
       });
 
@@ -404,13 +404,13 @@ describe(AssetService.name, () => {
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Thumbnail,
-        path: '/original/thumbnail.jpg',
+        path: 'file:///original/thumbnail.jpg',
         isEdited: false,
       });
       await ctx.newAssetFile({
         assetId: asset.id,
         type: AssetFileType.Thumbnail,
-        path: '/edited/thumbnail.jpg',
+        path: 'file:///edited/thumbnail.jpg',
         isEdited: true,
       });
 

@@ -33,7 +33,7 @@ const seedDirectSpaceAsset = async (
   const { user: owner } = await ctx.newUser();
   const { user: member } = await ctx.newUser();
   const { space } = await ctx.newSharedSpace({ createdById: owner.id });
-  const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath, visibility });
+  const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `file://${originalPath}`, visibility });
   await ctx.newSharedSpaceAsset({ spaceId: space.id, assetId: asset.id, addedById: owner.id });
   await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role });
   return { owner, member, space, asset };
@@ -46,7 +46,7 @@ const seedLinkedAlbumAsset = async (ctx: Ctx, role: SharedSpaceRole, originalPat
   const { space } = await ctx.newSharedSpace({ createdById: owner.id });
   const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: `ViewAlbum-${role}` });
   await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id });
-  const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath });
+  const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `file://${originalPath}` });
   await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
   await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role });
   return { owner, member, space, album, asset };
@@ -59,7 +59,11 @@ const seedLinkedLibraryAsset = async (ctx: Ctx, role: SharedSpaceRole, originalP
   const { space } = await ctx.newSharedSpace({ createdById: owner.id });
   const { library } = await ctx.newLibrary({ ownerId: owner.id });
   await ctx.newSharedSpaceLibrary({ spaceId: space.id, libraryId: library.id });
-  const { asset } = await ctx.newAsset({ ownerId: owner.id, libraryId: library.id, originalPath });
+  const { asset } = await ctx.newAsset({
+    ownerId: owner.id,
+    libraryId: library.id,
+    originalPath: `file://${originalPath}`,
+  });
   await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role });
   return { owner, member, space, library, asset };
 };
@@ -78,7 +82,7 @@ describe(ViewRepository.name, () => {
     it('GRANT — owner sees folders for assets they own', async () => {
       const { ctx, sut } = setup();
       const { user } = await ctx.newUser();
-      await ctx.newAsset({ ownerId: user.id, originalPath: '/lib/owner/family/p1.jpg' });
+      await ctx.newAsset({ ownerId: user.id, originalPath: 'file:///lib/owner/family/p1.jpg' });
 
       const result = await sut.getUniqueOriginalPaths(user.id);
 
@@ -124,7 +128,7 @@ describe(ViewRepository.name, () => {
       const { space } = await ctx.newSharedSpace({ createdById: owner.id });
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'HiddenTimeline' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id, showInTimeline: false });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/album/no-timeline/IMG.jpg' });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: 'file:///album/no-timeline/IMG.jpg' });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
 
@@ -142,7 +146,10 @@ describe(ViewRepository.name, () => {
       const { space } = await ctx.newSharedSpace({ createdById: owner.id });
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'PersonallyHidden' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/album/personally-hidden/IMG.jpg' });
+      const { asset } = await ctx.newAsset({
+        ownerId: owner.id,
+        originalPath: 'file:///album/personally-hidden/IMG.jpg',
+      });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
       await ctx.get(SharedSpaceRepository).hideAlbumForUser(space.id, album.id, member.id);
@@ -159,7 +166,7 @@ describe(ViewRepository.name, () => {
       const { space } = await ctx.newSharedSpace({ createdById: owner.id });
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'VisibleTimeline' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id, showInTimeline: true });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/album/yes-timeline/IMG.jpg' });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: 'file:///album/yes-timeline/IMG.jpg' });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
 
@@ -188,7 +195,7 @@ describe(ViewRepository.name, () => {
       const { user: owner } = await ctx.newUser();
       const { user: stranger } = await ctx.newUser();
       const { space } = await ctx.newSharedSpace({ createdById: owner.id });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/private/owner/secret/p1.jpg' });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: 'file:///private/owner/secret/p1.jpg' });
       await ctx.newSharedSpaceAsset({ spaceId: space.id, assetId: asset.id, addedById: owner.id });
 
       const result = await sut.getUniqueOriginalPaths(stranger.id);
@@ -202,7 +209,10 @@ describe(ViewRepository.name, () => {
       const { user: outsider } = await ctx.newUser();
       const { space: withAsset } = await ctx.newSharedSpace({ createdById: owner.id });
       const { space: other } = await ctx.newSharedSpace({ createdById: owner.id });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/private/owner/other-space/p1.jpg' });
+      const { asset } = await ctx.newAsset({
+        ownerId: owner.id,
+        originalPath: 'file:///private/owner/other-space/p1.jpg',
+      });
       await ctx.newSharedSpaceAsset({ spaceId: withAsset.id, assetId: asset.id, addedById: owner.id });
       // outsider belongs to a different space that does NOT contain the asset
       await ctx.newSharedSpaceMember({ spaceId: other.id, userId: outsider.id, role: SharedSpaceRole.Viewer });
@@ -281,7 +291,10 @@ describe(ViewRepository.name, () => {
       const { user: owner } = await ctx.newUser();
       const { user: stranger } = await ctx.newUser();
       const { space } = await ctx.newSharedSpace({ createdById: owner.id });
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: '/private/owner/contents/p1.jpg' });
+      const { asset } = await ctx.newAsset({
+        ownerId: owner.id,
+        originalPath: 'file:///private/owner/contents/p1.jpg',
+      });
       await ctx.newSharedSpaceAsset({ spaceId: space.id, assetId: asset.id, addedById: owner.id });
 
       const result = await sut.getAssetsByOriginalPath(stranger.id, '/private/owner/contents');
@@ -317,7 +330,7 @@ describe(ViewRepository.name, () => {
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'HiddenTimelineContents' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id, showInTimeline: false });
       const path = '/album/no-timeline-contents';
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `${path}/IMG.jpg` });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `file://${path}/IMG.jpg` });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
 
@@ -335,7 +348,7 @@ describe(ViewRepository.name, () => {
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'PersonallyHiddenContents' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id });
       const path = '/album/personally-hidden-contents';
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `${path}/IMG.jpg` });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `file://${path}/IMG.jpg` });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
       await ctx.get(SharedSpaceRepository).hideAlbumForUser(space.id, album.id, member.id);
@@ -353,7 +366,7 @@ describe(ViewRepository.name, () => {
       const { result: album } = await ctx.newAlbum({ ownerId: owner.id, albumName: 'VisibleTimelineContents' });
       await ctx.newSharedSpaceAlbum({ spaceId: space.id, albumId: album.id, showInTimeline: true });
       const path = '/album/yes-timeline-contents';
-      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `${path}/IMG.jpg` });
+      const { asset } = await ctx.newAsset({ ownerId: owner.id, originalPath: `file://${path}/IMG.jpg` });
       await ctx.newAlbumAsset({ albumId: album.id, assetId: asset.id });
       await ctx.newSharedSpaceMember({ spaceId: space.id, userId: member.id, role: SharedSpaceRole.Viewer });
 
