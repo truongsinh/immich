@@ -86,6 +86,7 @@ describe('S3StorageBackend', () => {
   describe('put', () => {
     it('should upload buffer using Upload (multipart-capable)', async () => {
       const { Upload } = await import('@aws-sdk/lib-storage');
+      mockSend.mockResolvedValueOnce({ ContentLength: 4 });
       await backend.put('upload/user1/ab/cd/file.jpg', Buffer.from('data'), {
         contentType: 'image/jpeg',
       });

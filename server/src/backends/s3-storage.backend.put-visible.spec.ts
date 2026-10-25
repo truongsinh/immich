@@ -67,7 +67,12 @@ const MULTIPART = 6 * 1024 * 1024;
 describe('S3StorageBackend.put waits for the object to be visible', () => {
   it.each([
     { name: 'visible at once', size: SMALL, heads: [SMALL], headsSeen: 1 },
-    { name: 'complete answered before the object exists', size: SMALL, heads: ['missing', 'missing', 'missing', SMALL], headsSeen: 4 },
+    {
+      name: 'complete answered before the object exists',
+      size: SMALL,
+      heads: ['missing', 'missing', 'missing', SMALL],
+      headsSeen: 4,
+    },
     { name: 'object visible short, then whole', size: SMALL, heads: [SMALL - 1, SMALL], headsSeen: 2 },
     { name: 'multipart upload, visible at once', size: MULTIPART, heads: [MULTIPART], headsSeen: 1 },
   ] as { name: string; size: number; heads: HeadAnswer[]; headsSeen: number }[])(

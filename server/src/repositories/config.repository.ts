@@ -204,6 +204,7 @@ const S3AliasEnvSchema = z.object({
   SECRET_ACCESS_KEY: z.string().optional(),
   PRESIGNED_URL_EXPIRY: z.coerce.number().int().optional(),
   SERVE_MODE: z.enum(['redirect', 'proxy']).optional(),
+  PUT_VISIBLE_TIMEOUT: z.coerce.number().int().positive().optional(),
 });
 
 const toS3StorageConfig = (settings: z.infer<typeof S3AliasEnvSchema>): S3StorageConfig => ({
@@ -214,6 +215,7 @@ const toS3StorageConfig = (settings: z.infer<typeof S3AliasEnvSchema>): S3Storag
   secretAccessKey: settings.SECRET_ACCESS_KEY,
   presignedUrlExpiry: settings.PRESIGNED_URL_EXPIRY || 3600,
   serveMode: settings.SERVE_MODE || 'redirect',
+  putVisibleTimeoutMs: settings.PUT_VISIBLE_TIMEOUT === undefined ? undefined : settings.PUT_VISIBLE_TIMEOUT * 1000,
 });
 
 /** Named aliases read `IMMICH_S3_<ALIAS>_*`, with the alias upper-cased and `-` mapped to `_`. */

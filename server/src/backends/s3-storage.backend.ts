@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { Readable, Transform, addAbortSignal, pipeline as pipelineCallback } from 'node:stream';
 import { buffer } from 'node:stream/consumers';
 import { pipeline } from 'node:stream/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   RangeNotSatisfiableError,
   ServeOptions,
@@ -43,6 +44,11 @@ const READABLE_URL_EXPIRY_SECONDS = 60;
 // correctness bound: too long leaves zombies holding slots; too short cuts streams the client
 // could still have resumed. Exported so tests derive their timings from it.
 export const S3_STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+// How long put() waits for its object to answer HEAD with the uploaded size. versitygw answers a retried
+// CompleteMultipartUpload with 200 while the first one is still assembling the object, so done() alone does not
+// prove the object exists; on quill's sftp-backed mount a 2 GB transcode assembles in about 90 s.
+const PUT_VISIBLE_TIMEOUT_MS = 30 * 60_000;
 
 class AsyncLimiter {
   private active = 0;
@@ -79,6 +85,7 @@ export interface S3StorageConfig {
   presignedUrlExpiry: number;
   serveMode: 'redirect' | 'proxy';
   proxyReadConcurrency?: number;
+  putVisibleTimeoutMs?: number;
 }
 
 export class S3StorageBackend implements StorageBackend {
@@ -87,9 +94,11 @@ export class S3StorageBackend implements StorageBackend {
   private presignedUrlExpiry: number;
   private serveMode: 'redirect' | 'proxy';
   private proxyReadLimiter: AsyncLimiter;
+  private putVisibleTimeoutMs: number;
 
   constructor(config: S3StorageConfig) {
     this.bucket = config.bucket;
+    this.putVisibleTimeoutMs = config.putVisibleTimeoutMs ?? PUT_VISIBLE_TIMEOUT_MS;
     this.presignedUrlExpiry = config.presignedUrlExpiry;
     this.serveMode = config.serveMode;
     this.proxyReadLimiter = new AsyncLimiter(config.proxyReadConcurrency ?? 32);
@@ -109,17 +118,51 @@ export class S3StorageBackend implements StorageBackend {
   }
 
   async put(key: string, source: Readable | Buffer, metadata?: { contentType?: string }): Promise<void> {
+    let size = Buffer.isBuffer(source) ? source.length : 0;
+    let body: Readable | Buffer = source;
+    if (!Buffer.isBuffer(source)) {
+      const counter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          size += chunk.length;
+          callback(null, chunk);
+        },
+      });
+      pipelineCallback(source, counter, () => {});
+      body = counter;
+    }
+
     const upload = new Upload({
       client: this.client,
       params: {
         Bucket: this.bucket,
         Key: key,
-        Body: source,
+        Body: body,
         ContentType: metadata?.contentType,
       },
     });
-
     await upload.done();
+
+    const deadline = Date.now() + this.putVisibleTimeoutMs;
+    for (;;) {
+      let visible: number | undefined;
+      try {
+        const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+        visible = head.ContentLength;
+      } catch (error: any) {
+        if (error.name !== 'NotFound' && error.$metadata?.httpStatusCode !== 404) {
+          throw error;
+        }
+      }
+      if (visible === size) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `s3 object ${key} not visible with ${size} bytes after ${this.putVisibleTimeoutMs} ms (last HEAD: ${visible ?? 'not found'})`,
+        );
+      }
+      await sleep(Math.min(10_000, this.putVisibleTimeoutMs / 10));
+    }
   }
 
   /**
