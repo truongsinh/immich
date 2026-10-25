@@ -2378,7 +2378,11 @@ async function phaseEncodedVideoAlias(): Promise<void> {
     }
     const playback = await fetchBytes(token, `/assets/${assetId}/video/playback`);
     assert.equal(playback.status, 200, `Playback returned ${playback.status}`);
-    assert.equal(sha256(playback.body), sha256(minioReadBytes(pathOf('encoded_video'))), 'Playback differs from the object');
+    assert.equal(
+      sha256(playback.body),
+      sha256(minioReadBytes(pathOf('encoded_video'))),
+      'Playback differs from the object',
+    );
   } finally {
     if (assetId) {
       await api('DELETE', '/assets', { token, body: { ids: [assetId], force: true } });

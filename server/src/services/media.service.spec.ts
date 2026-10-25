@@ -2795,7 +2795,6 @@ describe(MediaService.name, () => {
       const put = vi.fn().mockResolvedValue(void 0);
       vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['quill', { put }]]) as any);
       mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
-      mocks.media.probe.mockResolvedValue(probeStub.videoStreamVp9);
       mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { transcode: TranscodePolicy.All } });
 
       try {

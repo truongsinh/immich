@@ -44,7 +44,7 @@ export class QueueService extends BaseService {
   @OnEvent({ name: 'ConfigInit' })
   async onConfigInit({ newConfig: config }: ArgOf<'ConfigInit'>) {
     if (this.worker === ImmichWorker.Microservices) {
-      this.updateConcurrency(config);
+      await this.updateConcurrency(config);
       return;
     }
 
@@ -64,9 +64,9 @@ export class QueueService extends BaseService {
   }
 
   @OnEvent({ name: 'ConfigUpdate', server: true })
-  onConfigUpdate({ newConfig: config }: ArgOf<'ConfigUpdate'>) {
+  async onConfigUpdate({ newConfig: config }: ArgOf<'ConfigUpdate'>) {
     if (this.worker === ImmichWorker.Microservices) {
-      this.updateConcurrency(config);
+      await this.updateConcurrency(config);
       return;
     }
 
@@ -102,12 +102,16 @@ export class QueueService extends BaseService {
     this.jobRepository.teardown();
   }
 
-  private updateConcurrency(config: SystemConfig) {
+  private async updateConcurrency(config: SystemConfig) {
     this.logger.debug(`Updating queue concurrency settings`);
     for (const queueName of Object.values(QueueName)) {
       const concurrency = this.isConcurrentQueue(queueName) ? config.job[queueName].concurrency : 1;
       this.logger.debug(`Setting ${queueName} concurrency to ${concurrency}`);
       this.jobRepository.setConcurrency(queueName, concurrency);
+    }
+    for (const [queueName, concurrency] of Object.entries(this.configRepository.getEnv().bull.globalConcurrency)) {
+      this.logger.log(`Setting ${queueName} global concurrency to ${concurrency}`);
+      await this.jobRepository.setGlobalConcurrency(queueName as QueueName, concurrency);
     }
   }
 

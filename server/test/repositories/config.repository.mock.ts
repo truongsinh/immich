@@ -15,6 +15,7 @@ export const envData: EnvData = {
       prefix: 'immich_bull',
     },
     queues: [{ name: 'queue-1' }],
+    globalConcurrency: {},
   },
 
   cls: {
@@ -98,7 +99,7 @@ export const envData: EnvData = {
       serveMode: 'redirect',
     },
     aliases: {},
-    writeTargets: { originals: { type: 'disk' }, derivatives: { type: 'disk' } },
+    writeTargets: { originals: { type: 'disk' }, derivatives: { type: 'disk' }, encodedVideo: { type: 'disk' } },
   },
 
   telemetry: {

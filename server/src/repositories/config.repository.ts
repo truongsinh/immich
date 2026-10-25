@@ -56,6 +56,8 @@ export interface EnvData {
   bull: {
     config: QueueOptions;
     queues: RegisterQueueOptions[];
+    /** Concurrency held in Redis across every worker process, by queue; a queue not listed has none. */
+    globalConcurrency: Partial<Record<QueueName, number>>;
   };
 
   cls: {
@@ -135,8 +137,10 @@ export interface EnvData {
     writeTargets: {
       /** original files, sidecars and user profile images */
       originals: StorageTarget;
-      /** thumbnails, previews, fullsize, encoded video and person thumbnails */
+      /** thumbnails, previews, fullsize and person thumbnails */
       derivatives: StorageTarget;
+      /** transcoded videos; the derivatives target unless set on its own */
+      encodedVideo: StorageTarget;
     };
   };
 
@@ -291,6 +295,12 @@ const getEnv = (): EnvData => {
   const storageAliases = getStorageAliases(dto.IMMICH_STORAGE_ALIASES, legacyS3);
   const legacyWriteTarget: StorageTarget =
     dto.IMMICH_STORAGE_BACKEND === 's3' ? { type: 's3', alias: 'default' } : { type: 'disk' };
+  const derivativesTarget = getWriteTarget(
+    'IMMICH_STORAGE_WRITE_DERIVATIVES',
+    dto.IMMICH_STORAGE_WRITE_DERIVATIVES,
+    legacyWriteTarget,
+    storageAliases,
+  );
 
   const environment = dto.IMMICH_ENV || ImmichEnvironment.Production;
   const isProd = environment === ImmichEnvironment.Production;
@@ -393,6 +403,9 @@ const getEnv = (): EnvData => {
         },
       },
       queues: Object.values(QueueName).map((name) => ({ name })),
+      globalConcurrency: dto.IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY
+        ? { [QueueName.VideoConversion]: dto.IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY }
+        : {},
     },
 
     cls: {
@@ -472,10 +485,11 @@ const getEnv = (): EnvData => {
           legacyWriteTarget,
           storageAliases,
         ),
-        derivatives: getWriteTarget(
-          'IMMICH_STORAGE_WRITE_DERIVATIVES',
-          dto.IMMICH_STORAGE_WRITE_DERIVATIVES,
-          legacyWriteTarget,
+        derivatives: derivativesTarget,
+        encodedVideo: getWriteTarget(
+          'IMMICH_STORAGE_WRITE_ENCODED_VIDEO',
+          dto.IMMICH_STORAGE_WRITE_ENCODED_VIDEO,
+          derivativesTarget,
           storageAliases,
         ),
       },

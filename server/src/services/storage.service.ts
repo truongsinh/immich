@@ -41,6 +41,7 @@ export class StorageService extends BaseService {
   private static writeTargets: EnvData['storage']['writeTargets'] = {
     originals: { type: 'disk' },
     derivatives: { type: 'disk' },
+    encodedVideo: { type: 'disk' },
   };
 
   static getDiskBackend(): DiskStorageBackend {
@@ -56,9 +57,14 @@ export class StorageService extends BaseService {
     return resolveStoredPath(path, { disk, aliases: StorageService.getAliasBackends() });
   }
 
-  /** Where a new file of this kind is written: originals, sidecars and profile images vs generated files. */
+  /** Where a new file of this kind is written: originals, sidecars and profile images; encoded video; other generated files. */
   static getWriteTarget(pathType: PathType): StorageTarget {
-    return ORIGINALS.has(pathType) ? StorageService.writeTargets.originals : StorageService.writeTargets.derivatives;
+    if (ORIGINALS.has(pathType)) {
+      return StorageService.writeTargets.originals;
+    }
+    return pathType === AssetFileType.EncodedVideo
+      ? StorageService.writeTargets.encodedVideo
+      : StorageService.writeTargets.derivatives;
   }
 
   /** Upload staging and backups always live on disk; the other folders only while their write target is disk. */
@@ -68,9 +74,11 @@ export class StorageService extends BaseService {
       case StorageFolder.Profile: {
         return StorageService.writeTargets.originals.type === 'disk';
       }
-      case StorageFolder.Thumbnails:
-      case StorageFolder.EncodedVideo: {
+      case StorageFolder.Thumbnails: {
         return StorageService.writeTargets.derivatives.type === 'disk';
+      }
+      case StorageFolder.EncodedVideo: {
+        return StorageService.writeTargets.encodedVideo.type === 'disk';
       }
       default: {
         return true;
@@ -116,7 +124,7 @@ export class StorageService extends BaseService {
       this.logger.log(`Storage alias ${alias}: bucket ${config.bucket}, ${config.serveMode} mode`);
     }
     this.logger.log(
-      `Storage write targets: originals ${storageTargetUri(storage.writeTargets.originals)}, derivatives ${storageTargetUri(storage.writeTargets.derivatives)}`,
+      `Storage write targets: originals ${storageTargetUri(storage.writeTargets.originals)}, derivatives ${storageTargetUri(storage.writeTargets.derivatives)}, encoded video ${storageTargetUri(storage.writeTargets.encodedVideo)}`,
     );
 
     await this.databaseRepository.withLock(DatabaseLock.SystemFileMounts, async () => {

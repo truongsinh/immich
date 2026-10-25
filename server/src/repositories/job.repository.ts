@@ -202,6 +202,11 @@ export class JobRepository {
     worker.concurrency = concurrency;
   }
 
+  /** Caps the jobs of `queueName` running at once across every worker process (held in Redis). */
+  async setGlobalConcurrency(queueName: QueueName, concurrency: number) {
+    await this.getQueue(queueName).setGlobalConcurrency(concurrency);
+  }
+
   async isActive(name: QueueName): Promise<boolean> {
     const queue = this.getQueue(name);
     const count = await queue.getActiveCount();

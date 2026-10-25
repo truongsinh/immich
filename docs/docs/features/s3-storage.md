@@ -58,18 +58,20 @@ These settings define the S3 alias named `default`. With `IMMICH_STORAGE_BACKEND
 
 You can name more S3 aliases, each with its own bucket, endpoint, credentials and serve mode, and choose where each kind of new file goes. Name aliases by their role, for example `originals-eu` and `previews-home`.
 
-| Variable                                 | Description                                                                                                              |       Default       |
-| :--------------------------------------- | :----------------------------------------------------------------------------------------------------------------------- | :-----------------: |
-| `IMMICH_STORAGE_ALIASES`                 | Comma-separated alias names (lowercase letters, digits and dashes)                                                       |                     |
-| `IMMICH_S3_<ALIAS>_BUCKET`               | Bucket of the alias (required)                                                                                           |                     |
-| `IMMICH_S3_<ALIAS>_ENDPOINT`             | Endpoint of the alias                                                                                                    |                     |
-| `IMMICH_S3_<ALIAS>_REGION`               | Region of the alias                                                                                                      |     `us-east-1`     |
-| `IMMICH_S3_<ALIAS>_ACCESS_KEY_ID`        | Access key ID of the alias                                                                                               |                     |
-| `IMMICH_S3_<ALIAS>_SECRET_ACCESS_KEY`    | Secret access key of the alias                                                                                           |                     |
-| `IMMICH_S3_<ALIAS>_SERVE_MODE`           | `redirect` or `proxy`, per alias                                                                                         |     `redirect`      |
-| `IMMICH_S3_<ALIAS>_PRESIGNED_URL_EXPIRY` | Presigned URL expiration time in seconds, per alias                                                                      |       `3600`        |
-| `IMMICH_STORAGE_WRITE_ORIGINALS`         | Target for new originals, sidecars and profile images: `file://` or `s3://<alias>`                                       | from legacy backend |
-| `IMMICH_STORAGE_WRITE_DERIVATIVES`       | Target for new thumbnails, previews, full-size images, encoded videos and person thumbnails: `file://` or `s3://<alias>` | from legacy backend |
+| Variable                                     | Description                                                                                                                                           |        Default         |
+| :------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
+| `IMMICH_STORAGE_ALIASES`                     | Comma-separated alias names (lowercase letters, digits and dashes)                                                                                    |                        |
+| `IMMICH_S3_<ALIAS>_BUCKET`                   | Bucket of the alias (required)                                                                                                                        |                        |
+| `IMMICH_S3_<ALIAS>_ENDPOINT`                 | Endpoint of the alias                                                                                                                                 |                        |
+| `IMMICH_S3_<ALIAS>_REGION`                   | Region of the alias                                                                                                                                   |      `us-east-1`       |
+| `IMMICH_S3_<ALIAS>_ACCESS_KEY_ID`            | Access key ID of the alias                                                                                                                            |                        |
+| `IMMICH_S3_<ALIAS>_SECRET_ACCESS_KEY`        | Secret access key of the alias                                                                                                                        |                        |
+| `IMMICH_S3_<ALIAS>_SERVE_MODE`               | `redirect` or `proxy`, per alias                                                                                                                      |       `redirect`       |
+| `IMMICH_S3_<ALIAS>_PRESIGNED_URL_EXPIRY`     | Presigned URL expiration time in seconds, per alias                                                                                                   |         `3600`         |
+| `IMMICH_STORAGE_WRITE_ORIGINALS`             | Target for new originals, sidecars and profile images: `file://` or `s3://<alias>`                                                                    |  from legacy backend   |
+| `IMMICH_STORAGE_WRITE_DERIVATIVES`           | Target for new thumbnails, previews, full-size images, encoded videos and person thumbnails: `file://` or `s3://<alias>`                              |  from legacy backend   |
+| `IMMICH_STORAGE_WRITE_ENCODED_VIDEO`         | Target for new encoded videos only, overriding `IMMICH_STORAGE_WRITE_DERIVATIVES` for them: `file://` or `s3://<alias>`                               | the derivatives target |
+| `IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY` | How many video conversions may run at once across all servers and workers together (held in Redis); unset, each worker runs its own configured number |         unset          |
 
 `<ALIAS>` is the alias name upper-cased with `-` mapped to `_`: the alias `originals-eu` reads `IMMICH_S3_ORIGINALS_EU_BUCKET`. A write target set explicitly overrides `IMMICH_STORAGE_BACKEND`. A write target that names an alias that is not configured stops startup.
 
@@ -90,6 +92,8 @@ IMMICH_STORAGE_WRITE_DERIVATIVES=s3://previews-home
 ```
 
 Disk mount checks at startup only run for the folders whose target is disk; the upload staging and backup folders are always checked.
+
+Encoded videos can go to their own target, for example a bucket on slower but larger storage, while thumbnails and previews stay local: set `IMMICH_STORAGE_WRITE_ENCODED_VIDEO=s3://<alias>`. Each microservices worker runs its own share of video conversions, so with several workers the uploads to that bucket add up; `IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY=1` runs one at a time across all of them.
 
 ## Setup Guide
 

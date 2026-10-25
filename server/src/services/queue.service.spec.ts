@@ -6,6 +6,11 @@ import { mockEnvData } from 'test/repositories/config.repository.mock.js';
 import { factory } from 'test/small.factory.js';
 import { ServiceMocks, newTestService } from 'test/utils.js';
 
+const withGlobalConcurrency = (mocks: ServiceMocks, globalConcurrency: Partial<Record<QueueName, number>>) => {
+  const env = mockEnvData({});
+  mocks.config.getEnv.mockReturnValue({ ...env, bull: { ...env.bull, globalConcurrency } });
+};
+
 describe(QueueService.name, () => {
   let sut: QueueService;
   let mocks: ServiceMocks;
@@ -73,11 +78,6 @@ describe(QueueService.name, () => {
   });
 
   describe('video conversion global concurrency', () => {
-    const withGlobalConcurrency = (globalConcurrency: Partial<Record<QueueName, number>>) => {
-      const env = mockEnvData({});
-      mocks.config.getEnv.mockReturnValue({ ...env, bull: { ...env.bull, globalConcurrency } });
-    };
-
     it.each([
       { name: 'startup', run: () => sut.onConfigInit({ newConfig: defaults }) },
       {
@@ -85,7 +85,7 @@ describe(QueueService.name, () => {
         run: () => sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig }),
       },
     ])('gives videoConversion the configured global concurrency at $name and no other queue one', async ({ run }) => {
-      withGlobalConcurrency({ [QueueName.VideoConversion]: 1 });
+      withGlobalConcurrency(mocks, { [QueueName.VideoConversion]: 1 });
 
       await run();
 
@@ -94,7 +94,7 @@ describe(QueueService.name, () => {
     });
 
     it('leaves every queue without a global concurrency when none is configured', async () => {
-      withGlobalConcurrency({});
+      withGlobalConcurrency(mocks, {});
 
       await sut.onConfigInit({ newConfig: defaults });
 
@@ -103,8 +103,8 @@ describe(QueueService.name, () => {
   });
 
   describe('onConfigUpdate', () => {
-    it('should update concurrency', () => {
-      sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
+    it('should update concurrency', async () => {
+      await sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
 
       expect(mocks.job.setConcurrency).toHaveBeenCalledTimes(24);
       expect(mocks.job.setConcurrency).toHaveBeenNthCalledWith(5, QueueName.FacialRecognition, 1);
@@ -128,7 +128,7 @@ describe(QueueService.name, () => {
       await sut.onConfigInit({ newConfig: defaults });
 
       // Then trigger update
-      sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
+      await sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
 
       expect(mocks.cron.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -139,19 +139,19 @@ describe(QueueService.name, () => {
       );
     });
 
-    it('should not update cron when lock is not held', () => {
+    it('should not update cron when lock is not held', async () => {
       mocks.config.getWorker.mockReturnValue(ImmichWorker.Api);
       // nightlyJobsLock is false by default
 
-      sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
+      await sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
 
       expect(mocks.cron.update).not.toHaveBeenCalled();
     });
 
-    it('should update concurrency on microservices worker without touching cron', () => {
+    it('should update concurrency on microservices worker without touching cron', async () => {
       mocks.config.getWorker.mockReturnValue(ImmichWorker.Microservices);
 
-      sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
+      await sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig });
 
       expect(mocks.job.setConcurrency).toHaveBeenCalled();
       expect(mocks.cron.update).not.toHaveBeenCalled();

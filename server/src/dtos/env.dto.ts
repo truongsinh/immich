@@ -54,6 +54,8 @@ export const EnvSchema = z
     IMMICH_STORAGE_ALIASES: z.string().optional(),
     IMMICH_STORAGE_WRITE_ORIGINALS: z.string().optional(),
     IMMICH_STORAGE_WRITE_DERIVATIVES: z.string().optional(),
+    IMMICH_STORAGE_WRITE_ENCODED_VIDEO: z.string().optional(),
+    IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY: z.coerce.number().int().positive().optional(),
     IMMICH_S3_BUCKET: z.string().optional(),
     IMMICH_S3_REGION: z.string().optional(),
     IMMICH_S3_ENDPOINT: z.string().optional(),

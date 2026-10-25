@@ -531,6 +531,7 @@ describe(StorageService.name, () => {
         writeTargets: {
           originals: { type: 's3', alias: 'originals-eu' },
           derivatives: { type: 's3', alias: 'previews-home' },
+          encodedVideo: { type: 's3', alias: 'previews-home' },
         },
       });
 
@@ -578,7 +579,7 @@ describe(StorageService.name, () => {
           writeTargets: { originals: { type: 'disk' }, ...targets },
         });
 
-        const markers = mocks.storage.createFile.mock.calls.map(([path]) => String(path));
+        const markers = mocks.storage.createFile.mock.calls.map(([path]) => path);
         for (const folder of checked) {
           expect(markers).toContainEqual(expect.stringContaining(`/data/${folder}/.immich`));
         }

@@ -454,7 +454,7 @@ describe('getEnv', () => {
       });
     });
 
-    it.each([
+    it.each<{ env: Record<string, string>; encodedVideo: object; derivatives: object }>([
       {
         env: { IMMICH_STORAGE_WRITE_ENCODED_VIDEO: 's3://quill', IMMICH_STORAGE_WRITE_DERIVATIVES: 'file://' },
         encodedVideo: { type: 's3', alias: 'quill' },
