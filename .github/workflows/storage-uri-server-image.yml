@@ -19,7 +19,7 @@ concurrency:
 permissions: {}
 
 env:
-  SOURCE_SHA: 7c55187cb5569c96f50b74cc1dc732a998fd1b2d
+  SOURCE_SHA: c608e328444e43a00c4fd3646e59c73fa98dc02c
   VERSION: v5.8.0
   TAG_SUFFIX: storage-uri
 
