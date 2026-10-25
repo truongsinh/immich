@@ -2818,6 +2818,32 @@ describe(MediaService.name, () => {
       }
     });
 
+    it('a transcode whose put rejects fails the job and keeps its local output', async () => {
+      const { StorageService } = await import('src/services/storage.service.js');
+      const targets = Reflect.get(StorageService, 'writeTargets');
+      Reflect.set(StorageService, 'writeTargets', {
+        originals: { type: 'disk' },
+        derivatives: { type: 'disk' },
+        encodedVideo: { type: 's3', alias: 'quill' },
+      });
+      const put = vi.fn().mockRejectedValue(new Error('s3 object encoded-video/x.mp4 not visible'));
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['quill', { put }]]) as any);
+      mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
+      mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { transcode: TranscodePolicy.All } });
+
+      try {
+        await expect(sut.handleVideoConversion({ id: 'video-id' })).rejects.toThrow('not visible');
+
+        expect(mocks.storage.unlink).not.toHaveBeenCalledWith(StorageCore.getEncodedVideoPath(asset as any));
+        expect(mocks.asset.upsertFile).not.toHaveBeenCalledWith(
+          expect.objectContaining({ type: AssetFileType.EncodedVideo }),
+        );
+      } finally {
+        Reflect.set(StorageService, 'writeTargets', targets);
+        vi.restoreAllMocks();
+      }
+    });
+
     it('should transcode the highest bitrate video stream', async () => {
       mocks.logger.isLevelEnabled.mockReturnValue(false);
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.multipleVideoStreams });
