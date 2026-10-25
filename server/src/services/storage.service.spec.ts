@@ -537,6 +537,57 @@ describe(StorageService.name, () => {
       expect(StorageService.getWriteTarget(kind)).toEqual({ type: 's3', alias: expected });
     });
 
+    it.each<{ kind: PathType; alias: string }>([{ kind: AssetFileType.EncodedVideo, alias: 'quill' }])(
+      'writes a new $kind file to $alias when encoded video has its own target',
+      async ({ kind, alias: expected }) => {
+        await bootstrapWith(sut, mocks, {
+          aliases: {
+            'originals-eu': alias({ bucket: 'originals', endpoint: 'https://s3.eu.example', serveMode: 'redirect' }),
+            'previews-home': alias({ bucket: 'previews', endpoint: 'https://minio.home:9000', serveMode: 'proxy' }),
+            quill: alias({ bucket: 'immich-derivatives', endpoint: 'http://quill:9310', serveMode: 'proxy' }),
+          },
+          writeTargets: {
+            originals: { type: 's3', alias: 'originals-eu' },
+            derivatives: { type: 's3', alias: 'previews-home' },
+            encodedVideo: { type: 's3', alias: 'quill' },
+          },
+        });
+
+        expect(StorageService.getWriteTarget(kind)).toEqual({ type: 's3', alias: expected });
+      },
+    );
+
+    it.each([
+      {
+        targets: { derivatives: { type: 'disk' as const }, encodedVideo: { type: 's3' as const, alias: 'quill' } },
+        checked: ['thumbs'],
+        skipped: ['encoded-video'],
+      },
+      {
+        targets: { derivatives: { type: 's3' as const, alias: 'quill' }, encodedVideo: { type: 'disk' as const } },
+        checked: ['encoded-video'],
+        skipped: ['thumbs'],
+      },
+    ])(
+      'keeps encoded video on disk only when its own target is disk, and thumbnails only when the derivatives target is: $checked',
+      async ({ targets, checked, skipped }) => {
+        await bootstrapWith(sut, mocks, {
+          aliases: {
+            quill: alias({ bucket: 'immich-derivatives', endpoint: 'http://quill:9310', serveMode: 'proxy' }),
+          },
+          writeTargets: { originals: { type: 'disk' }, ...targets },
+        });
+
+        const markers = mocks.storage.createFile.mock.calls.map(([path]) => String(path));
+        for (const folder of checked) {
+          expect(markers).toContainEqual(expect.stringContaining(`/data/${folder}/.immich`));
+        }
+        for (const folder of skipped) {
+          expect(markers).not.toContainEqual(expect.stringContaining(`/data/${folder}/.immich`));
+        }
+      },
+    );
+
     it('serves each alias in its own mode: proxy streams the file, redirect signs against its own endpoint', async () => {
       const server = createServer((request, response) => {
         response.end(

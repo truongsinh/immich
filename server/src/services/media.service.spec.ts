@@ -2784,6 +2784,41 @@ describe(MediaService.name, () => {
       expect(mocks.media.transcode).not.toHaveBeenCalled();
     });
 
+    it('stores a transcode on the s3 encoded-video target while thumbnails stay on disk', async () => {
+      const { StorageService } = await import('src/services/storage.service.js');
+      const targets = Reflect.get(StorageService, 'writeTargets');
+      Reflect.set(StorageService, 'writeTargets', {
+        originals: { type: 'disk' },
+        derivatives: { type: 'disk' },
+        encodedVideo: { type: 's3', alias: 'quill' },
+      });
+      const put = vi.fn().mockResolvedValue(void 0);
+      vi.spyOn(StorageService, 'getAliasBackends').mockReturnValue(new Map([['quill', { put }]]) as any);
+      mocks.storage.createPlainReadStream.mockReturnValue(makeStream([Buffer.from('mp4')]) as any);
+      mocks.media.probe.mockResolvedValue(probeStub.videoStreamVp9);
+      mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { transcode: TranscodePolicy.All } });
+
+      try {
+        await sut.handleVideoConversion({ id: 'video-id' });
+        const thumbnail = await (sut as any).persistFile(
+          AssetFileType.Thumbnail,
+          '/local/thumb.webp',
+          'thumbs/aa/bb/x.webp',
+          'image/webp',
+        );
+
+        const key = StorageCore.getRelativeEncodedVideoPath(asset as any);
+        expect(put).toHaveBeenCalledWith(key, expect.anything(), { contentType: 'video/mp4' });
+        expect(mocks.asset.upsertFile).toHaveBeenCalledWith(
+          expect.objectContaining({ type: AssetFileType.EncodedVideo, path: `s3://quill/${key}` }),
+        );
+        expect(thumbnail).toBe('file:///local/thumb.webp');
+      } finally {
+        Reflect.set(StorageService, 'writeTargets', targets);
+        vi.restoreAllMocks();
+      }
+    });
+
     it('should transcode the highest bitrate video stream', async () => {
       mocks.logger.isLevelEnabled.mockReturnValue(false);
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.multipleVideoStreams });

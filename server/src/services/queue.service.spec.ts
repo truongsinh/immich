@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { SystemConfig, defaults } from 'src/dtos/config.dto.js';
 import { ImmichWorker, JobName, QueueCleanType, QueueCommand, QueueName } from 'src/enum.js';
 import { QueueService } from 'src/services/queue.service.js';
+import { mockEnvData } from 'test/repositories/config.repository.mock.js';
 import { factory } from 'test/small.factory.js';
 import { ServiceMocks, newTestService } from 'test/utils.js';
 
@@ -68,6 +69,36 @@ describe(QueueService.name, () => {
           expression: '30 3 * * *',
         }),
       );
+    });
+  });
+
+  describe('video conversion global concurrency', () => {
+    const withGlobalConcurrency = (globalConcurrency: Partial<Record<QueueName, number>>) => {
+      const env = mockEnvData({});
+      mocks.config.getEnv.mockReturnValue({ ...env, bull: { ...env.bull, globalConcurrency } });
+    };
+
+    it.each([
+      { name: 'startup', run: () => sut.onConfigInit({ newConfig: defaults }) },
+      {
+        name: 'a config update',
+        run: () => sut.onConfigUpdate({ newConfig: defaults, oldConfig: {} as SystemConfig }),
+      },
+    ])('gives videoConversion the configured global concurrency at $name and no other queue one', async ({ run }) => {
+      withGlobalConcurrency({ [QueueName.VideoConversion]: 1 });
+
+      await run();
+
+      expect(mocks.job.setGlobalConcurrency).toHaveBeenCalledWith(QueueName.VideoConversion, 1);
+      expect(mocks.job.setGlobalConcurrency).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves every queue without a global concurrency when none is configured', async () => {
+      withGlobalConcurrency({});
+
+      await sut.onConfigInit({ newConfig: defaults });
+
+      expect(mocks.job.setGlobalConcurrency).not.toHaveBeenCalled();
     });
   });
 

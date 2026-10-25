@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [options]"
       echo "  --cleanup       Tear down infrastructure after run"
       echo "  --no-cleanup    Keep infrastructure running (default)"
-      echo "  --phase <name>  Run only a specific phase (setup, migrate-to-s3, migrate-to-disk, split-aliases, unreachable-alias)"
+      echo "  --phase <name>  Run only a specific phase (setup, migrate-to-s3, migrate-to-disk, split-aliases, encoded-video-alias, unreachable-alias)"
       echo "  --verbose       Show docker logs inline"
       exit 0
       ;;
@@ -120,6 +120,9 @@ else
   )
   restart_server_with "${SPLIT[@]}"
   run_phase split-aliases
+
+  restart_server_with "${SPLIT[@]}" IMMICH_STORAGE_WRITE_ENCODED_VIDEO=s3://archive
+  run_phase encoded-video-alias
 
   restart_server_with "${SPLIT[@]}" PREVIEWS_HOME_ENDPOINT=http://unreachable.invalid:9000
   run_phase unreachable-alias

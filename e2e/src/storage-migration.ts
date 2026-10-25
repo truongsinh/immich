@@ -2337,6 +2337,59 @@ async function phaseVideoTrimS3(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Phase: encoded-video-alias
+//
+// A video uploaded while encoded video has its own write target gets its
+// transcode on that alias, while its thumbnail and preview stay on the
+// derivatives alias.
+//
+// Runs with IMMICH_STORAGE_WRITE_DERIVATIVES=s3://previews-home and
+// IMMICH_STORAGE_WRITE_ENCODED_VIDEO=s3://archive.
+// ---------------------------------------------------------------------------
+async function phaseEncodedVideoAlias(): Promise<void> {
+  console.log('=== Phase: encoded-video-alias ===');
+  const token = await loginAdmin();
+  minioSetupAlias();
+  const originalConfig = await api('GET', '/system-config', { token });
+  const config = structuredClone(originalConfig);
+  config.ffmpeg.transcode = 'all';
+  await api('PUT', '/system-config', { body: config, token });
+
+  let assetId: string | undefined;
+  try {
+    const base64 = dockerExec(
+      'immich-server',
+      'ffmpeg -y -loglevel error -f lavfi -i testsrc=duration=2:size=192x144:rate=10 ' +
+        String.raw`-c:v libx264 -pix_fmt yuv420p /tmp/encoded-alias.mp4 && base64 /tmp/encoded-alias.mp4 | tr -d "\n"`,
+    );
+    ({ id: assetId } = await uploadAsset(token, 'encoded-video-alias.mp4', Buffer.from(base64, 'base64')));
+    await waitForProcessing(token, 120_000);
+
+    const files = await queryDb<{ type: string; path: string }>(
+      `SELECT type, path FROM asset_file WHERE "assetId" = $1 AND "isEdited" = false`,
+      [assetId],
+    );
+    const pathOf = (type: string) => files.find((file) => file.type === type)?.path ?? '';
+    console.log(`  encoded_video=${pathOf('encoded_video')} thumbnail=${pathOf('thumbnail')}`);
+    assert.ok(isOnAlias(pathOf('encoded_video'), 'archive'), `Transcode not on archive: ${pathOf('encoded_video')}`);
+    assert.ok(minioFileExists(pathOf('encoded_video')), `Transcode missing from the archive bucket`);
+    for (const type of ['thumbnail', 'preview']) {
+      assert.ok(isOnAlias(pathOf(type), 'previews-home'), `${type} not on previews-home: ${pathOf(type)}`);
+    }
+    const playback = await fetchBytes(token, `/assets/${assetId}/video/playback`);
+    assert.equal(playback.status, 200, `Playback returned ${playback.status}`);
+    assert.equal(sha256(playback.body), sha256(minioReadBytes(pathOf('encoded_video'))), 'Playback differs from the object');
+  } finally {
+    if (assetId) {
+      await api('DELETE', '/assets', { token, body: { ids: [assetId], force: true } });
+    }
+    await api('PUT', '/system-config', { body: originalConfig, token });
+  }
+
+  console.log('=== Phase: encoded-video-alias complete ===');
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
@@ -2437,13 +2490,17 @@ async function main() {
         await phaseSplitAliases();
         break;
       }
+      case 'encoded-video-alias': {
+        await phaseEncodedVideoAlias();
+        break;
+      }
       case 'unreachable-alias': {
         await phaseUnreachableAlias();
         break;
       }
       default: {
         throw new Error(
-          `Unknown phase: ${phase}. Valid phases: setup, estimate, migrate-to-s3, migrate-to-disk, rollback, no-files, concurrent-rejection, selective-to-s3, selective-cleanup, delete-source-false, content-verify, sidecar-verify, template-s3-bulk-skipped, template-s3-upload-skipped, template-s3-live-photo-skipped, template-s3-sidecar-skipped, template-s3-queue-migration-skipped, template-disk-baseline, copy-asset-sidecar-s3, user-delete-s3-orphans, video-trim-s3, split-aliases, unreachable-alias`,
+          `Unknown phase: ${phase}. Valid phases: setup, estimate, migrate-to-s3, migrate-to-disk, rollback, no-files, concurrent-rejection, selective-to-s3, selective-cleanup, delete-source-false, content-verify, sidecar-verify, template-s3-bulk-skipped, template-s3-upload-skipped, template-s3-live-photo-skipped, template-s3-sidecar-skipped, template-s3-queue-migration-skipped, template-disk-baseline, copy-asset-sidecar-s3, user-delete-s3-orphans, video-trim-s3, split-aliases, encoded-video-alias, unreachable-alias`,
         );
       }
     }

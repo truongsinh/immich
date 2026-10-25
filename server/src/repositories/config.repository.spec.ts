@@ -51,6 +51,8 @@ const resetEnv = () => {
     'IMMICH_STORAGE_ALIASES',
     'IMMICH_STORAGE_WRITE_ORIGINALS',
     'IMMICH_STORAGE_WRITE_DERIVATIVES',
+    'IMMICH_STORAGE_WRITE_ENCODED_VIDEO',
+    'IMMICH_VIDEO_CONVERSION_GLOBAL_CONCURRENCY',
   ]) {
     delete process.env[env];
   }
@@ -448,8 +450,32 @@ describe('getEnv', () => {
       expect(storage.writeTargets).toEqual({
         originals: { type: 's3', alias: 'originals-eu' },
         derivatives: { type: 's3', alias: 'previews-home' },
+        encodedVideo: { type: 's3', alias: 'previews-home' },
       });
     });
+
+    it.each([
+      {
+        env: { IMMICH_STORAGE_WRITE_ENCODED_VIDEO: 's3://quill', IMMICH_STORAGE_WRITE_DERIVATIVES: 'file://' },
+        encodedVideo: { type: 's3', alias: 'quill' },
+        derivatives: { type: 'disk' },
+      },
+      {
+        env: { IMMICH_STORAGE_WRITE_DERIVATIVES: 's3://quill' },
+        encodedVideo: { type: 's3', alias: 'quill' },
+        derivatives: { type: 's3', alias: 'quill' },
+      },
+      { env: {}, encodedVideo: { type: 'disk' }, derivatives: { type: 'disk' } },
+    ])(
+      'sets the encoded-video write target from IMMICH_STORAGE_WRITE_ENCODED_VIDEO, and follows the derivatives target when unset: $env',
+      ({ env, encodedVideo, derivatives }) => {
+        setEnv({ IMMICH_STORAGE_ALIASES: 'quill', IMMICH_S3_QUILL_BUCKET: 'immich-derivatives', ...env });
+
+        const { storage } = getEnv();
+
+        expect(storage.writeTargets).toMatchObject({ derivatives, encodedVideo });
+      },
+    );
 
     it.each([
       { backend: 's3', target: { type: 's3', alias: 'default' } },
@@ -466,13 +492,14 @@ describe('getEnv', () => {
         const { storage } = getEnv();
 
         expect(storage.aliases.default).toMatchObject({ bucket: 'legacy-bucket', endpoint: 'http://minio:9000' });
-        expect(storage.writeTargets).toEqual({ originals: target, derivatives: target });
+        expect(storage.writeTargets).toEqual({ originals: target, derivatives: target, encodedVideo: target });
       },
     );
 
     it.each([
       { variable: 'IMMICH_STORAGE_WRITE_ORIGINALS', value: 's3://archive-us' },
       { variable: 'IMMICH_STORAGE_WRITE_DERIVATIVES', value: 's3://archive-us' },
+      { variable: 'IMMICH_STORAGE_WRITE_ENCODED_VIDEO', value: 's3://archive-us' },
       { variable: 'IMMICH_STORAGE_BACKEND', value: 's3' },
     ])('stops startup when $variable=$value names an unconfigured alias', ({ variable, value }) => {
       setEnv({ IMMICH_STORAGE_ALIASES: 'originals-eu', IMMICH_S3_ORIGINALS_EU_BUCKET: 'originals', [variable]: value });
